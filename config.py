@@ -58,7 +58,7 @@ class Param:
         parser.add_argument("--max_grad_norm", default=10, type=float)
 
         # dataset path
-        parser.add_argument("--data_path", default="/kaggle/input/full-data/datasets", type=str)
+        parser.add_argument("--data_path", default="./datasets", type=str)
         
         # bert-base-uncased weights path
         parser.add_argument("--bert_path", default="bert-base-uncased", type=str)
