@@ -48,16 +48,16 @@ class CELoss(nn.Module):
 
     
     
-def save_model(config, lora_model, classifier_model, file_name):
+def save_model(config, lora_model, classifier_model, file_name, task):
     current_file_path = os.path.abspath(__file__)
     parent_folder = os.path.dirname(current_file_path)
 
 
-    if not os.path.exists(config.save_checkpoint + file_name):
+    if not os.path.exists(parent_folder + '/' + config.save_checkpoint + file_name):
         os.makedirs(parent_folder + '/' + config.save_checkpoint + file_name)
         
     lora_model.save_lora(parent_folder + '/' + config.save_checkpoint + file_name)
-    torch.save(classifier_model, parent_folder + '/' + config.save_checkpoint + file_name)
+    torch.save(classifier_model, parent_folder + '/' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
 
 
 def train_simple_model(config, encoder, classifier, training_data, epochs, map_relid2tempid, test_data, seen_relations, steps):
@@ -105,7 +105,7 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
                 'optimizer': optimizer.state_dict(),
             }
             path_save = f"checkpoint_task_{steps}"            
-            save_model(config, encoder, state_classifier, path_save)
+            save_model(config, encoder, state_classifier, path_save, steps)
 
 
 def compute_jsd_loss(m_input):
