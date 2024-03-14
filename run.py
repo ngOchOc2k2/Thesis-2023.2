@@ -14,7 +14,7 @@ from config import Param
 import os
 
 
-logging.basicConfig(filename='./Ngoc/Tacred_5_O_LoRA_256.log',level=print, format='%(asctime)s - %(levelname)s - %(message)s')
+# logging.basicConfig(filename='./Ngoc/Tacred_5_O_LoRA_256.log',level=print, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 
