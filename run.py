@@ -69,7 +69,7 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
     criterion = CELoss()
     optimizer = optim.Adam([
         {'params': encoder.parameters(), 'lr': 0.00002},
-        {'params': classifier.parameters(), 'lr': 0.001}
+        {'params': classifier.parameters(), 'lr': 0.0005}
     ])
     
     for epoch_i in range(epochs):
@@ -98,14 +98,14 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             + f"{color_loss}Loss:{color_reset} {color_number}{np.array(losses).mean()}{color_reset}," 
             + f"{color_epoch}Accuracy:{color_reset} {color_number}{acc}{color_reset}")
 
-        if acc >= optim_acc:
-            optim_acc = acc
-            state_classifier = {
-                'state_dict': classifier.state_dict(),
-                'optimizer': optimizer.state_dict(),
-            }
-            path_save = f"checkpoint_task_{steps}"            
-            save_model(config, encoder, state_classifier, path_save, steps)
+        # if acc >= optim_acc:
+        #     optim_acc = acc
+        #     state_classifier = {
+        #         'state_dict': classifier.state_dict(),
+        #         'optimizer': optimizer.state_dict(),
+        #     }
+        #     path_save = f"checkpoint_task_{steps}"            
+        #     save_model(config, encoder, state_classifier, path_save, steps)
 
 
 def compute_jsd_loss(m_input):
@@ -267,7 +267,7 @@ if __name__ == '__main__':
             
             print(f'Tranable Params: {count_trainable_params(encoder)}')
             
-            classifier = Classifier_Layer(config=config, num_class=config.num_class).to(config.device)
+            classifier = Classifier_Layer(config=config, num_class=len(history_relations)).to(config.device)
     
             test_data_all = []
             for relation in current_relations:

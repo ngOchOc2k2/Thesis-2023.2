@@ -17,16 +17,16 @@ class Param:
         parser.add_argument("--device", default="cuda", type=str)
 
         # training parameters
-        parser.add_argument("--batch_size", default=32, type=int)
+        parser.add_argument("--batch_size", default=64, type=int)
         parser.add_argument("--num_tasks", default=10)
         parser.add_argument("--rel_per_task", default=8)
         parser.add_argument("--pattern", default="entity_marker")
-        parser.add_argument("--max_length", default=128, type=int)
+        parser.add_argument("--max_length", default=192, type=int)
         parser.add_argument("--encoder_output_size", default=768, type=int)
         parser.add_argument("--vocab_size", default=30522, type=int)
         parser.add_argument("--marker_size", default=4, type=int)
         parser.add_argument("--num_workers", default=0, type=int)
-        parser.add_argument("--save_checkpoint", default="checkpoint/", type=str)
+        parser.add_argument("--save_checkpoint", default="./checkpoint/", type=str)
 
         # learning rate
         parser.add_argument("--classifier_lr", default=1e-2, type=float)
@@ -87,5 +87,11 @@ class Param:
 
         # lora params
         parser.add_argument("--rank_lora", default=8, type=int)
+        
+        
+        # retrieval configs
+        parser.add_argument("--bge-model", default="BAAI/bge-m3", type=str)
+        parser.add_argument("--description-path", default="./description/all-2.json", type=str)
+        parser.add_argument("--type-similar", default="colbert", type=str)
         
         return parser

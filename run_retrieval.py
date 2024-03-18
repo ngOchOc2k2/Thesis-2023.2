@@ -1,18 +1,14 @@
+import json
 import random
-import torch
-from methods.backbone import Bert_Encoder, Softmax_Layer, Dropout_Layer, Bert_LoRa
+import os
+import re
 from dataloaders.data_loader import get_data_loader
 from dataloaders.sampler import data_sampler
-import torch.nn.functional as F
-import torch.nn as nn
-import torch.optim as optim
-import numpy as np
-import collections
-from tqdm import tqdm
-import logging
+from FlagEmbedding import BGEM3FlagModel
 from config import Param
-import re
-import json
+import numpy as np
+from tqdm import tqdm
+
 
 color_epoch = '\033[92m' 
 color_loss = '\033[92m'  
@@ -20,53 +16,6 @@ color_number = '\033[93m'
 color_reset = '\033[0m'
 
 
-PROMPT = """
-User information
-----------------
-Example 1: 
-{{
-    'context': {text_r1},
-    'entity_1': {ett_r11},
-    'entity_2': {ett_r12},
-    'relation': {r1}
-}}
-
-Example 2: 
-{{
-    'context': {text_r2},
-    'entity_1': {ett_r21},
-    'entity_2': {ett_r22},
-    'relation': {r2}
-}}
-
-Example 3: 
-{{
-    'context': {text_r3},
-    'entity_1': {ett_r31},
-    'entity_2': {ett_r32},
-    'relation': {r3}
-}}
-
-Example 4: 
-{{
-    'context': {text_r4},
-    'entity_1': {ett_r41},
-    'entity_2': {ett_r42},
-    'relation': {r4}
-}}
-
-----------------
-Relation
-----------------
-[
-    {r1},
-    {r2},
-    {r3},
-    {r4}
-]
-----------------
-You are a useful information extraction machine. Read the examples carefully and explain the sense of five relations above (note: not analysis the examples).
-"""
 
 def extract_text_between_tags(sentence):
     match_e11_e12 = re.search(r'\[E11\](.*?)\[E12\]', sentence)
@@ -81,13 +30,6 @@ def extract_text_between_tags(sentence):
 param = Param()
 args = param.args
 
-# Device
-# torch.cuda.set_device(args.gpu)
-# args.device = torch.device(args.device)
-
-# Num GPU
-# args.n_gpu = torch.cuda.device_count()
-
 # Task name
 args.task_name = args.dataname
 
@@ -97,7 +39,6 @@ args.rel_per_task = 8 if args.dataname == "FewRel" else 4
 if __name__ == '__main__':
     config = args
 
-    config.step1_epochs = 10
     config.total_round = 1
     list_format = []
     
@@ -112,47 +53,69 @@ if __name__ == '__main__':
         rel2id = sampler.rel2id
             
         num_class = len(sampler.id2rel)
-
-        list_relation = []
+        bge_m3 = BGEM3FlagModel(config.bge_model, use_fp16=True)
+        description_relation = json.load(open(config.description_path, 'r'))
+        id2name = [item['relation'] for item in description_relation]
         
-        for steps, (training_data, valid_data, test_data, current_relations, historic_test_data, seen_relations) in enumerate(sampler):
+        if config.dataname == 'FewRel':
+            convert2name = json.load(open('./datasets/id2rel_tacred.json', 'r'))
+        else:
+            convert2name = json.load(open('./datasets/id2rel.json', 'r'))
             
-            list_relation.append(current_relations)
             
-            temp_format = []
+        text_description = [item['text'] for item in description_relation]
+        
+        accuracy_retrieval, total_retrieval = {}, {}
+
+        # embedding description
+        embedding_description = bge_m3.encode(text_description, return_dense=True, return_colbert_vecs=True)
+        
+        for steps, (training_data, valid_data, test_data, current_relations, historic_test_data, seen_relations) in enumerate(tqdm(sampler)):
+            
+            test_data_combine = []
             for relation in current_relations:
                 sample_first = training_data[relation][0]
+                accuracy_retrieval[relation] = 0
+                total_retrieval[relation] = 0
                 
-                e11, e21 = extract_text_between_tags(sample_first['text'])
-                temp_format.append({
-                    'text': sample_first['text'],
-                    'entity_1': e11,
-                    'entity_2': e21,
-                    'relation': id2rel[sample_first['relation']]
-                })
-                
-            prompt_format = PROMPT.format_map({
-                'text_r1': temp_format[0]['text'],
-                'ett_r11': temp_format[0]['entity_1'],
-                'ett_r12': temp_format[0]['entity_2'],
-                'r1': temp_format[0]['relation'],
-                
-                'text_r2': temp_format[1]['text'],
-                'ett_r21': temp_format[1]['entity_1'],
-                'ett_r22': temp_format[1]['entity_2'],
-                'r2': temp_format[1]['relation'],
-                
-                'text_r3': temp_format[2]['text'],
-                'ett_r31': temp_format[2]['entity_1'],
-                'ett_r32': temp_format[2]['entity_2'],
-                'r3': temp_format[2]['relation'],
-                
-                'text_r4': temp_format[3]['text'],
-                'ett_r41': temp_format[3]['entity_1'],
-                'ett_r42': temp_format[3]['entity_2'],
-                'r4': temp_format[3]['relation'],
-            })
             
-            list_format.append(prompt_format)
+                # get total test data
+                test_data_combine += test_data[current_relations]
+                
             
-            json.dump(list_format, open('/home/luungoc/Thesis - 2023.2/Thesis_NgocLT/format/format.json', 'w'), ensure_ascii=False)
+            for sample in test_data_combine:
+                text = sample['text']
+                embedding_text = bge_m3.encode(text, max_length=512, return_dense=True, return_colbert_vecs=True)
+                
+                
+                # consider similarity function
+                if config.typy_similar == 'dense':
+                    similarity = embedding_text @ embedding_description['dense'].T
+                    total_retrieval[convert2name[sample['relation']]] += 1
+                    
+                    index = np.argmax(similarity)
+
+                    predict_relation = id2name[index]
+                    if sample['relation'] == predict_relation:
+                        accuracy_retrieval[predict_relation] += 1
+                        
+
+                elif config.typy_similar == 'colbert':
+                    result = []
+                    
+                    for idx in range(len(embedding_description['colbert_vecs'])):
+                        a = float(bge_m3.colbert_score(embedding_text['colbert_vecs'], embedding_description['colbert_vecs'][idx]))
+                        result.append(a)
+                        
+                        
+                        result = np.array(result)
+                        total_retrieval[convert2name[sample['relation']]] += 1
+                        index = np.argmax(result)
+                        predict_relation = id2name[index]
+                        
+                        if sample['relation'] == predict_relation:
+                            accuracy_retrieval[predict_relation] += 1
+                            
+                            
+        for keys, value in enumerate(accuracy_retrieval):
+            print(f"{value}: {accuracy_retrieval[value] / total_retrieval[value]}" if total_retrieval[value] != 0 else f"{value}: 0.00")
