@@ -1,7 +1,8 @@
 import random
 import torch
-from methods.backbone import Bert_Encoder, Softmax_Layer, Dropout_Layer, Bert_LoRa, Classifier_Layer
+from methods.backbone import Bert_LoRa, Classifier_Layer
 from dataloaders.data_loader import get_data_loader
+from sklearn.cluster import KMeans
 from dataloaders.sampler import data_sampler
 import torch.nn.functional as F
 import torch.nn as nn
@@ -11,11 +12,17 @@ import collections
 from tqdm import tqdm
 import logging
 from config import Param
+from FlagEmbedding import BGEM3FlagModel
+from FlagEmbedding.baai_general_embedding.finetune import BiEncoderModel, BiTrainer
+from FlagEmbedding.baai_general_embedding.finetune.data import TrainDatasetForEmbedding, EmbedCollator
+from transformers import AutoConfig, AutoTokenizer
+import logging
 import os
+from pathlib import Path
 
 
-# logging.basicConfig(filename='./Ngoc/Tacred_5_O_LoRA_256.log',level=print, format='%(asctime)s - %(levelname)s - %(message)s')
 
+logger = logging.getLogger(__name__)
 
 
 color_epoch = '\033[92m' 
@@ -60,6 +67,52 @@ def save_model(config, lora_model, classifier_model, file_name, task):
     torch.save(classifier_model, parent_folder + '/' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
 
 
+
+def get_proto(config, encoder, relation_dataset):
+    data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
+    features = []
+    encoder.eval()
+
+    for step, batch_data in enumerate(data_loader):
+        labels, tokens = batch_data
+        tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
+        with torch.no_grad():
+            feature = encoder(tokens)
+        features.append(feature)
+        
+    features = torch.cat(features, dim=0)
+    proto = torch.mean(features, dim=0, keepdim=True).cpu()
+    standard = torch.sqrt(torch.var(features, dim=0)).cpu()
+    return proto, standard
+
+
+
+def select_data(config, encoder, relation_dataset):
+    data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
+    features = []
+    encoder.eval()
+    
+    for step, batch_data in enumerate(data_loader):
+        labels, tokens = batch_data
+        tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
+        with torch.no_grad():
+            feature = encoder(tokens).cpu()
+        features.append(feature)
+
+    features = np.concatenate(features)
+    num_clusters = min(config.num_protos, len(relation_dataset))
+    distances = KMeans(n_clusters=num_clusters, random_state=0).fit_transform(features)
+
+    memory = []
+    for k in range(num_clusters):
+        sel_index = np.argmin(distances[:, k])
+        instance = relation_dataset[sel_index]
+        memory.append(instance)
+    return memory
+
+
+
+
 def train_simple_model(config, encoder, classifier, training_data, epochs, map_relid2tempid, test_data, seen_relations, steps):
     data_loader = get_data_loader(config, training_data, shuffle=True)
     encoder.train()
@@ -81,7 +134,7 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             labels = [map_relid2tempid[x.item()] for x in labels]
             
             labels = torch.tensor(labels).to(config.device)
-            tokens = torch.stack([x.to(config.device) for x in tokens],dim=0)
+            tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
             reps = encoder(tokens)
 
             logits = classifier(reps)
@@ -191,6 +244,62 @@ def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations
     return correct/n
 
 
+def train_retrieval(args):
+    set_seed(args.seed_retrieval)
+
+    num_labels = 1
+    tokenizer = AutoTokenizer.from_pretrained(
+        args.tokenizer_name if args.tokenizer_name else args.bge_model,
+        cache_dir=args.cache_dir,
+        use_fast=False,
+    )
+    config = AutoConfig.from_pretrained(
+        args.config_name if args.config_name else args.bge_model,
+        num_labels=num_labels,
+        cache_dir=args.cache_dir,
+    )
+    logger.info('Config: %s', config)
+
+    model = BiEncoderModel(model_name=args.bge_model,
+                           normlized=args.normlized,
+                           sentence_pooling_method=args.sentence_pooling_method,
+                           negatives_cross_device=args.negatives_cross_device,
+                           temperature=args.temperature,
+                           use_inbatch_neg=args.use_inbatch_neg,
+                           )
+
+    if args.fix_position_embedding:
+        for k, v in model.named_parameters():
+            if "position_embeddings" in k:
+                logging.info(f"Freeze the parameters for {k}")
+                v.requires_grad = False
+
+    train_dataset = TrainDatasetForEmbedding(args=args, tokenizer=tokenizer)    
+
+    trainer = BiTrainer(
+        model=model,
+        args=args,
+        train_dataset=train_dataset,
+        data_collator=EmbedCollator(
+            tokenizer,
+            query_max_len=args.query_max_len,
+            passage_max_len=args.passage_max_len
+        ),
+        tokenizer=tokenizer
+    )
+
+    Path(args.output_dir_model_retrieval).mkdir(parents=True, exist_ok=True)
+
+    # Training
+    trainer.train()
+    trainer.save_model()
+
+    if trainer.is_world_process_zero():
+        tokenizer.save_pretrained(args.output_dir)
+
+
+
+
 param = Param()
 args = param.args
 
@@ -207,7 +316,7 @@ if __name__ == '__main__':
 
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
-    config.total_round = 6
+    config.total_round = 1
     
     for rou in range(config.total_round):
         test_cur = []
@@ -232,6 +341,12 @@ if __name__ == '__main__':
         relation_standard = {}
         forward_accs = []
         total_acc = []
+        
+        
+        # setup retrieval
+        bge_m3 = BGEM3FlagModel(config.bge_model, use_fp16=True)
+        
+        
         
         for steps, (training_data, valid_data, test_data, current_relations, historic_test_data, seen_relations) in enumerate(sampler):
             

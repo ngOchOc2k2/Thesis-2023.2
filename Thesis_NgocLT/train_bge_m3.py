@@ -2,6 +2,8 @@ import json
 import random
 import os
 import re
+import torch
+from sklearn.cluster import KMeans
 from dataloaders.data_loader import get_data_loader
 from dataloaders.sampler import data_sampler
 from FlagEmbedding import BGEM3FlagModel
@@ -28,23 +30,54 @@ def extract_text_between_tags(sentence):
 
 
 def save_to_jsonl(data, file_path):
-    """
-    Lưu dữ liệu vào một file JSONL.
-
-    Parameters:
-        data (list): Danh sách các đối tượng để lưu vào file JSONL.
-        file_path (str): Đường dẫn tới file JSONL.
-
-    Returns:
-        None
-    """
     with open(file_path, "w") as jsonl_file:
         for item in data:
-            json.dump(item, jsonl_file)  # Ghi một đối tượng JSON vào file
-            jsonl_file.write("\n")  # Viết dấu xuống dòng sau mỗi đối tượng
-
+            json.dump(item, jsonl_file)
+            jsonl_file.write("\n")
     print("Dữ liệu đã được lưu vào file JSONL:", file_path)
     
+
+def get_proto(config, encoder, relation_dataset):
+    data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
+    features = []
+    encoder.eval()
+
+    for step, batch_data in enumerate(data_loader):
+        labels, tokens = batch_data
+        tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
+        with torch.no_grad():
+            feature = encoder(tokens)
+        features.append(feature)
+        
+    features = torch.cat(features, dim=0)
+    proto = torch.mean(features, dim=0, keepdim=True).cpu()
+    standard = torch.sqrt(torch.var(features, dim=0)).cpu()
+    return proto, standard
+
+
+
+def select_data(config, encoder, relation_dataset):
+    data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
+    features = []
+    encoder.eval()
+    
+    for step, batch_data in enumerate(data_loader):
+        labels, tokens = batch_data
+        tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
+        with torch.no_grad():
+            feature = encoder(tokens).cpu()
+        features.append(feature)
+
+    features = np.concatenate(features)
+    num_clusters = min(config.num_protos, len(relation_dataset))
+    distances = KMeans(n_clusters=num_clusters, random_state=0).fit_transform(features)
+
+    memory = []
+    for k in range(num_clusters):
+        sel_index = np.argmin(distances[:, k])
+        instance = relation_dataset[sel_index]
+        memory.append(instance)
+    return memory
 
     
 
@@ -75,7 +108,9 @@ if __name__ == '__main__':
             
         num_class = len(sampler.id2rel)
         print("---"*30 + 'Loading Model!' + '---'*30)
+        bge_m3 = BGEM3FlagModel(config.bge_model, use_fp16=True)
         description_relation = json.load(open(config.description_path, 'r'))
+        
         id2name = [item['relation'] for item in description_relation]
         
         if config.dataname == 'TACRED':
@@ -83,7 +118,7 @@ if __name__ == '__main__':
         else:
             convert2name = json.load(open(config.data_path + '/id2rel.json', 'r'))
             
-            
+    
         text_description = [item['text'] for item in description_relation]
         
         accuracy_retrieval, total_retrieval = {}, {}

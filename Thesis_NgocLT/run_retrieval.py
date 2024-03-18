@@ -2,9 +2,12 @@ import json
 import random
 import os
 import re
+import torch
+from sklearn.cluster import KMeans
 from dataloaders.data_loader import get_data_loader
 from dataloaders.sampler import data_sampler
 from FlagEmbedding import BGEM3FlagModel
+from FlagEmbedding.baai_general_embedding.finetune.run import main
 from config import Param
 import numpy as np
 from tqdm import tqdm
@@ -25,6 +28,31 @@ def extract_text_between_tags(sentence):
     extracted_e21_e22 = match_e21_e22.group(1).strip() if match_e21_e22 else None
     
     return extracted_e11_e12, extracted_e21_e22
+
+
+
+def select_data(config, encoder, relation_dataset):
+    data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
+    features = []
+    encoder.eval()
+    
+    for step, batch_data in enumerate(data_loader):
+        labels, tokens = batch_data
+        tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
+        with torch.no_grad():
+            feature = encoder(tokens).cpu()
+        features.append(feature)
+
+    features = np.concatenate(features)
+    num_clusters = min(config.num_protos, len(relation_dataset))
+    distances = KMeans(n_clusters=num_clusters, random_state=0).fit_transform(features)
+
+    memory = []
+    for k in range(num_clusters):
+        sel_index = np.argmin(distances[:, k])
+        instance = relation_dataset[sel_index]
+        memory.append(instance)
+    return memory
 
 
 param = Param()
@@ -81,9 +109,9 @@ if __name__ == '__main__':
         for steps, (training_data, valid_data, test_data, current_relations, historic_test_data, seen_relations) in enumerate(tqdm(sampler)):
             
             print(f"Task {steps + 1}: {current_relations}")
+            
             test_data_combine = []
             for relation in current_relations:
-                # get total test data
                 test_data_combine += test_data[relation]
                 
                 
