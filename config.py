@@ -38,7 +38,7 @@ class Param:
         parser.add_argument("--max_grad_norm", default=10, type=float)
 
         # dataset path
-        parser.add_argument("--data_path", default="/home/luungoc/Thesis - 2023.2/Thesis_NgocLT/datasets/", type=str)
+        parser.add_argument("--data_path", default="/kaggle/input/data-relation/datasets/", type=str)
         
         # bert-base-uncased weights path
         parser.add_argument("--bert_path", default="bert-base-uncased", type=str)
@@ -58,61 +58,57 @@ class Param:
         
         # retrieval configs
         parser.add_argument("--bge-model", default="BAAI/bge-m3", type=str)
-        parser.add_argument("--description-path", default="/home/luungoc/Thesis - 2023.2/Thesis_NgocLT/datasets/description/new.json", type=str)
+        parser.add_argument("--description-path", default="/kaggle/input/standard/standard.json", type=str)
         parser.add_argument("--type-similar", default="colbert", type=str)
         parser.add_argument("--num-protos", default=5, type=int)
         
         
         
         # train retrieval
-        parser.add_argument("--tokenizer-name", default="BAAI/bge-m3", type=str)
-        parser.add_argument("--cache-dir", default=True, type=bool)
-        parser.add_argument("--config-name", default=None, type=str)
-        parser.add_argument("--normlized", default=True, type=bool)
+        # parser.add_argument("--tokenizer-name", default="BAAI/bge-m3", type=str)
+        # parser.add_argument("--cache-dir", default=True, type=bool)
+        # parser.add_argument("--config-name", default=None, type=str)
+        # parser.add_argument("--normlized", default=True, type=bool)
         
-        parser.add_argument("--sentence-pooling-method", default="cls", type=str)
-        parser.add_argument("--negatives-cross-device", default=True, type=bool)
-        parser.add_argument("--temperature", default=0.02, type=float)
-        parser.add_argument("--use-inbatch-neg", default=True, type=bool)
+        # parser.add_argument("--sentence-pooling-method", default="cls", type=str)
+        # parser.add_argument("--negatives-cross-device", default=True, type=bool)
+        # parser.add_argument("--temperature", default=0.02, type=float)
+        # parser.add_argument("--use-inbatch-neg", default=True, type=bool)
         
-        parser.add_argument("--fix-position-embedding", default=False, type=bool)
-        parser.add_argument("--query-max-len", default=1024, type=int)
-        parser.add_argument("--passage-max-len", default=256, type=int)
-        parser.add_argument("--output-dir-model-retrieval", default="./model_bge", type=str)
+        # parser.add_argument("--fix-position-embedding", default=False, type=bool)
+        # parser.add_argument("--query-max-len", default=1024, type=int)
+        # parser.add_argument("--passage-max-len", default=256, type=int)
+        # parser.add_argument("--output-dir-model-retrieval", default="./model_bge", type=str)
 
-        parser.add_argument("--seed-retrieval", default=42, type=int)
+        # parser.add_argument("--seed-retrieval", default=42, type=int)
         
-        parser.add_argument("--train-data", default=None, type=str)
-        parser.add_argument("--learning-rate", default=1e-5, type=float)
-        parser.add_argument("--fp16", default=True, type=bool)
-        parser.add_argument("--num-train-epochs", default=2, type=int)
+        # parser.add_argument("--train-data", default=None, type=str)
+        # parser.add_argument("--learning-rate", default=1e-5, type=float)
+        # parser.add_argument("--fp16", default=True, type=bool)
+        # parser.add_argument("--num-train-epochs", default=2, type=int)
 
-        parser.add_argument("--train-data", default=None, type=str)
-        parser.add_argument("--learning-rate", default=1e-5, type=float)
-        parser.add_argument("--fp16", default=True, type=bool)
-        parser.add_argument("--num-train-epochs", default=2, type=int)
 
-        parser.add_argument("--per-device-train-batch-size", default=2, type=int)
-        parser.add_argument("--per-device-eval-batch-size", default=8, type=int)
-        parser.add_argument("--dataloader-drop-last", default=True, type=bool)
-        parser.add_argument("--train-group-size", default=2, type=int)
+        # parser.add_argument("--per-device-train-batch-size", default=2, type=int)
+        # parser.add_argument("--per-device-eval-batch-size", default=8, type=int)
+        # parser.add_argument("--dataloader-drop-last", default=True, type=bool)
+        # parser.add_argument("--train-group-size", default=2, type=int)
         
-        parser.add_argument("--logging-steps", default=10, type=int)
-        parser.add_argument("--query-instruction-for-retrieval", default="", type=str)
-        parser.add_argument("--save-steps", default=1500, type=int)
-        parser.add_argument("--save-total-limit", default=3, type=int)
+        # parser.add_argument("--logging-steps", default=10, type=int)
+        # parser.add_argument("--query-instruction-for-retrieval", default="", type=str)
+        # parser.add_argument("--save-steps", default=1500, type=int)
+        # parser.add_argument("--save-total-limit", default=3, type=int)
         
-        parser.add_argument("--tf32", default=None, type=int)
-        parser.add_argument("--eval-steps", default=None, type=float)
-        parser.add_argument("--do-predict", default=False, type=bool)
-        parser.add_argument("--deepspeeds", default=None, type=str)
+        # parser.add_argument("--tf32", default=None, type=int)
+        # parser.add_argument("--eval-steps", default=None, type=float)
+        # parser.add_argument("--do-predict", default=False, type=bool)
+        # parser.add_argument("--deepspeeds", default=None, type=str)
         
-        parser.add_argument("--ddp-timeout", default=1800, type=int)
-        parser.add_argument("--bf16", default=False, type=float)
-        parser.add_argument("--adam-beta1", default=0.9, type=float)
-        parser.add_argument("--adam-beta2", default=0.999, type=float)
+        # parser.add_argument("--ddp-timeout", default=1800, type=int)
+        # parser.add_argument("--bf16", default=False, type=float)
+        # parser.add_argument("--adam-beta1", default=0.9, type=float)
+        # parser.add_argument("--adam-beta2", default=0.999, type=float)
         
-        parser.add_argument("--adam-epsilon", default=1e-08, type=float)
-        parser.add_argument("--adafactor", default=False, type=bool)
+        # parser.add_argument("--adam-epsilon", default=1e-08, type=float)
+        # parser.add_argument("--adafactor", default=False, type=bool)
 
         return parser
