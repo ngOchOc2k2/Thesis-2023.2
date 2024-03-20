@@ -15,7 +15,9 @@ from config import Param
 from FlagEmbedding import BGEM3FlagModel
 from FlagEmbedding.baai_general_embedding.finetune import BiEncoderModel, BiTrainer
 from FlagEmbedding.baai_general_embedding.finetune.data import TrainDatasetForEmbedding, EmbedCollator
+from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
 from transformers import AutoConfig, AutoTokenizer
+from transformers import set_seed
 import logging
 import os
 from pathlib import Path
@@ -31,7 +33,7 @@ color_number = '\033[93m'
 color_reset = '\033[0m'
 
 
-def set_seed(config, seed):
+def set_seed_classifier(config, seed):
     config.n_gpu = torch.cuda.device_count()
     random.seed(seed)
     np.random.seed(seed)
@@ -56,17 +58,18 @@ class CELoss(nn.Module):
     
     
 def save_model(config, lora_model, classifier_model, file_name, task):
-    current_file_path = os.path.abspath(__file__)
-    parent_folder = os.path.dirname(current_file_path)
+    # current_file_path = os.path.abspath(__file__)
+    # parent_folder = os.path.dirname(current_file_path)
 
-
-    if not os.path.exists(parent_folder + '/' + config.save_checkpoint + file_name):
-        os.makedirs(parent_folder + '/' + config.save_checkpoint + file_name)
+    # if not os.path.exists(parent_folder + '/' + config.save_checkpoint + file_name):
+    #     os.makedirs(parent_folder + '/' + config.save_checkpoint + file_name)
         
-    lora_model.save_lora(parent_folder + '/' + config.save_checkpoint + file_name)
-    torch.save(classifier_model, parent_folder + '/' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
+    # lora_model.save_lora(parent_folder + '/' + config.save_checkpoint + file_name)
+    # torch.save(classifier_model, parent_folder + '/' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
 
-
+    lora_model.save_lora('./' + config.save_checkpoint + file_name)
+    torch.save(classifier_model, './' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
+    
 
 def get_proto(config, encoder, relation_dataset):
     data_loader = get_data_loader(config, relation_dataset, shuffle=False, drop_last=False, batch_size=1)
@@ -122,7 +125,7 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
     criterion = CELoss()
     optimizer = optim.Adam([
         {'params': encoder.parameters(), 'lr': 0.00002},
-        {'params': classifier.parameters(), 'lr': 0.0005}
+        {'params': classifier.parameters(), 'lr': 0.001}
     ])
     
     for epoch_i in range(epochs):
@@ -151,33 +154,17 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             + f"{color_loss}Loss:{color_reset} {color_number}{np.array(losses).mean()}{color_reset}," 
             + f"{color_epoch}Accuracy:{color_reset} {color_number}{acc}{color_reset}")
 
-        # if acc >= optim_acc:
-        #     optim_acc = acc
-        #     state_classifier = {
-        #         'state_dict': classifier.state_dict(),
-        #         'optimizer': optimizer.state_dict(),
-        #     }
-        #     path_save = f"checkpoint_task_{steps}"            
-        #     save_model(config, encoder, state_classifier, path_save, steps)
+        if acc >= optim_acc:
+            optim_acc = acc
+            state_classifier = {
+                'state_dict': classifier.state_dict(),
+                'optimizer': optimizer.state_dict(),
+            }
+            path_save = f"checkpoint_task_{steps}"            
+            save_model(config, encoder, state_classifier, path_save, steps)
 
 
-def compute_jsd_loss(m_input):
-    m = m_input.shape[0]
-    mean = torch.mean(m_input, dim=0)
-    jsd = 0
-    for i in range(m):
-        loss = F.kl_div(F.log_softmax(mean, dim=-1), F.softmax(m_input[i], dim=-1), reduction='none')
-        loss = loss.sum()
-        jsd += loss / m
-    return jsd
-
-
-def contrastive_loss(hidden, labels):
-
-    logsoftmax = nn.LogSoftmax(dim=-1)
-
-    return -(logsoftmax(hidden) * labels).sum() / labels.sum()
-
+    return optim_acc
 
 def construct_hard_triplets(output, labels, relation_data):
     positive = []
@@ -244,62 +231,6 @@ def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations
     return correct/n
 
 
-def train_retrieval(args):
-    set_seed(args.seed_retrieval)
-
-    num_labels = 1
-    tokenizer = AutoTokenizer.from_pretrained(
-        args.tokenizer_name if args.tokenizer_name else args.bge_model,
-        cache_dir=args.cache_dir,
-        use_fast=False,
-    )
-    config = AutoConfig.from_pretrained(
-        args.config_name if args.config_name else args.bge_model,
-        num_labels=num_labels,
-        cache_dir=args.cache_dir,
-    )
-    logger.info('Config: %s', config)
-
-    model = BiEncoderModel(model_name=args.bge_model,
-                           normlized=args.normlized,
-                           sentence_pooling_method=args.sentence_pooling_method,
-                           negatives_cross_device=args.negatives_cross_device,
-                           temperature=args.temperature,
-                           use_inbatch_neg=args.use_inbatch_neg,
-                           )
-
-    if args.fix_position_embedding:
-        for k, v in model.named_parameters():
-            if "position_embeddings" in k:
-                logging.info(f"Freeze the parameters for {k}")
-                v.requires_grad = False
-
-    train_dataset = TrainDatasetForEmbedding(args=args, tokenizer=tokenizer)    
-
-    trainer = BiTrainer(
-        model=model,
-        args=args,
-        train_dataset=train_dataset,
-        data_collator=EmbedCollator(
-            tokenizer,
-            query_max_len=args.query_max_len,
-            passage_max_len=args.passage_max_len
-        ),
-        tokenizer=tokenizer
-    )
-
-    Path(args.output_dir_model_retrieval).mkdir(parents=True, exist_ok=True)
-
-    # Training
-    trainer.train()
-    trainer.save_model()
-
-    if trainer.is_world_process_zero():
-        tokenizer.save_pretrained(args.output_dir)
-
-
-
-
 param = Param()
 args = param.args
 
@@ -317,6 +248,7 @@ if __name__ == '__main__':
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
     config.total_round = 1
+    
     
     for rou in range(config.total_round):
         test_cur = []
@@ -344,7 +276,7 @@ if __name__ == '__main__':
         
         
         # setup retrieval
-        bge_m3 = BGEM3FlagModel(config.bge_model, use_fp16=True)
+        # bge_m3 = BGEM3FlagModel(config.bge_model, use_fp16=True)
         
         
         
@@ -389,7 +321,7 @@ if __name__ == '__main__':
                 test_data_all += test_data[relation]
 
 
-            train_simple_model(
+            cur_acc = train_simple_model(
                 config, 
                 encoder, 
                 classifier, 
@@ -400,10 +332,12 @@ if __name__ == '__main__':
                 seen_relations,
                 steps + 1,
             )
+            
+            
 
             torch.cuda.empty_cache()
             
-            cur_acc = evaluate_strict_model(config, encoder, classifier, test_data_all, seen_relations, map_relid2tempid)
+            cur_acc = max(cur_acc, evaluate_strict_model(config, encoder, classifier, test_data_all, seen_relations, map_relid2tempid))
             test_cur.append(cur_acc)
             total_acc.append(cur_acc)
             

@@ -109,51 +109,45 @@ class data_sampler(object):
         return cur_training_data, cur_valid_data, cur_test_data, current_relations, self.history_test_data, self.seen_relations
 
     def _read_data(self, file):
-        if os.path.isfile(self.save_data_path):
-            with open(self.save_data_path, "rb") as f:
-                datas = pickle.load(f)
-            train_dataset, val_dataset, test_dataset = datas
-            return train_dataset, val_dataset, test_dataset
-        else:
-            data = json.load(open(file, "r", encoding="utf-8"))
-            train_dataset = [[] for i in range(self.args.num_of_relation)]
-            val_dataset = [[] for i in range(self.args.num_of_relation)]
-            test_dataset = [[] for i in range(self.args.num_of_relation)]
-            for relation in data.keys():
-                rel_samples = data[relation]
-                if self.seed != None:
-                    random.seed(self.seed)
-                random.shuffle(rel_samples)
-                count = 0
-                count1 = 0
-                for i, sample in enumerate(rel_samples):
-                    tokenized_sample = {}
-                    tokenized_sample["relation"] = self.rel2id[sample["relation"]]
-                    tokenized_sample["text"] = " ".join(sample["tokens"])
-                    tokenized_sample["tokens"] = self.tokenizer.encode(" ".join(sample["tokens"]), padding="max_length", truncation=True, max_length=self.args.max_length)
+        data = json.load(open(file, "r", encoding="utf-8"))
+        train_dataset = [[] for i in range(self.args.num_of_relation)]
+        val_dataset = [[] for i in range(self.args.num_of_relation)]
+        test_dataset = [[] for i in range(self.args.num_of_relation)]
+        for relation in data.keys():
+            rel_samples = data[relation]
+            if self.seed != None:
+                random.seed(self.seed)
+            random.shuffle(rel_samples)
+            count = 0
+            count1 = 0
+            for i, sample in enumerate(rel_samples):
+                tokenized_sample = {}
+                tokenized_sample["relation"] = self.rel2id[sample["relation"]]
+                tokenized_sample["text"] = " ".join(sample["tokens"])
+                tokenized_sample["tokens"] = self.tokenizer.encode(" ".join(sample["tokens"]), padding="max_length", truncation=True, max_length=self.args.max_length)
 
 
-                    if self.args.task_name == "FewRel":
-                        if i < self.args.num_of_train:
-                            train_dataset[self.rel2id[relation]].append(tokenized_sample)
-                        elif i < self.args.num_of_train + self.args.num_of_val:
-                            val_dataset[self.rel2id[relation]].append(tokenized_sample)
-                        else:
-                            test_dataset[self.rel2id[relation]].append(tokenized_sample)
+                if self.args.task_name == "FewRel":
+                    if i < self.args.num_of_train:
+                        train_dataset[self.rel2id[relation]].append(tokenized_sample)
+                    elif i < self.args.num_of_train + self.args.num_of_val:
+                        val_dataset[self.rel2id[relation]].append(tokenized_sample)
                     else:
-                        if i < len(rel_samples) // 5 and count <= 40:
-                            count += 1
-                            test_dataset[self.rel2id[relation]].append(tokenized_sample)
-                        else:
-                            count1 += 1
-                            train_dataset[self.rel2id[relation]].append(tokenized_sample)
-                            if count1 >= 320:
-                                break
+                        test_dataset[self.rel2id[relation]].append(tokenized_sample)
+                else:
+                    if i < len(rel_samples) // 5 and count <= 40:
+                        count += 1
+                        test_dataset[self.rel2id[relation]].append(tokenized_sample)
+                    else:
+                        count1 += 1
+                        train_dataset[self.rel2id[relation]].append(tokenized_sample)
+                        if count1 >= 320:
+                            break
 
-                    
-            with open(self.save_data_path, "wb") as f:
-                pickle.dump((train_dataset, val_dataset, test_dataset), f)
-            return train_dataset, val_dataset, test_dataset
+                
+        with open(self.save_data_path, "wb") as f:
+            pickle.dump((train_dataset, val_dataset, test_dataset), f)
+        return train_dataset, val_dataset, test_dataset
 
     def _read_relations(self, file):
         id2rel = json.load(open(file, "r", encoding="utf-8"))

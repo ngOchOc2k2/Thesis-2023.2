@@ -147,8 +147,9 @@ if __name__ == '__main__':
                     
                     for rela in current_relations:
                         if rela != relation:
-                            x = random.randint(0, len(training_data[rela]) - 2)
-                            neg_list.append(training_data[rela][x]['text'])
+                            for _ in range(2):
+                                x = random.randint(0, len(training_data[rela]) - 2)
+                                neg_list.append(training_data[rela][x]['text'])
                     
                     train_retrieval.append({
                         'query': description,
@@ -156,4 +157,5 @@ if __name__ == '__main__':
                         'neg': neg_list
                     })
                     
+        random.shuffle(train_retrieval)
         save_to_jsonl(train_retrieval, './with_neg.jsonl')
