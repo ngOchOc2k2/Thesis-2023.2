@@ -345,13 +345,14 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                     # Get task value have the most frequent
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    if value_task == task:
+                    # if value_task == task:
+                    if task == negative[predict_task]:
                         count_retrieval += 1
                         print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
                     else:
-                        print(f"Task: {task}, Wrong predict task: {value_task}")
+                        print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
                     
             result_retrieval.append(count_retrieval / len(test_data_text))
       
@@ -734,9 +735,9 @@ if __name__ == '__main__':
 
 
             # Prepare data for training retrieval
+            retrieval_model = None
             
-            if config.trainable_retrieval:
-                    
+            if config.trainable_retrieval: 
                 data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
                     config, 
                     steps, 
@@ -802,7 +803,7 @@ if __name__ == '__main__':
             print(f"Length test current task: {len(test_data_task)}")
             print(f'Current test acc: {cur_acc}')
             print(f'Accuracy test all task: {test_cur}')
-            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
+            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel, retrieval_path=retrieval_model))
             print('---'*23 + f'Finish task {steps}!' + '---'*23 + '\n')
             
             memorized_samples.append({
