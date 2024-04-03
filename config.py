@@ -29,7 +29,7 @@ class Param:
         parser.add_argument("--save_checkpoint", default="./checkpoint/", type=str)
 
         # epochs
-        parser.add_argument("--classifier_epochs", default=1, type=int)
+        parser.add_argument("--classifier_epochs", default=5, type=int)
 
         # seed
         parser.add_argument("--seed", default=2021, type=int)

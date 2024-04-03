@@ -103,6 +103,12 @@ class BiEncoderModel(nn.Module):
                 target = torch.zeros(scores.size(0), device=scores.device, dtype=torch.long)
                 loss = self.compute_loss(scores, target)
 
+
+            # Compute distillation loss
+            if teacher_score is not None:
+                distillation_loss = self.compute_distillation_loss(scores, teacher_score)
+                loss += distillation_loss
+                
         else:
             scores = self.compute_similarity(q_reps, p_reps)
             loss = None
@@ -136,3 +142,8 @@ class BiEncoderModel(nn.Module):
              for k,
                  v in state_dict.items()})
         self.model.save_pretrained(output_dir, state_dict=state_dict)
+
+
+    def compute_distillation_loss(self, student_scores, teacher_scores):
+        return nn.KLDivLoss()(torch.log_softmax(student_scores, dim=-1), torch.softmax(teacher_scores, dim=-1))
+

@@ -47,4 +47,6 @@ class BiTrainer(Trainer):
         outputs = model(**inputs)
         loss = outputs.loss
 
+            
+        
         return (loss, outputs) if return_outputs else loss
