@@ -45,6 +45,8 @@ Example: {example}
 
 
 
+
+
 PROMPT_TASK_TACRED_ALL = """The task involves relation extraction for two entities within a given sentence. 
 There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
@@ -232,7 +234,7 @@ def most_frequent_value(array):
 
 
 
-def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel):    
+def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel, retrieval_path=None):    
     
     # If first task
     if steps == 0:      
@@ -275,7 +277,7 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
         data_for_classifier_task = [[] for _ in range(steps + 1)]
         
         # Load model bge
-        if config.trainable_retrieval:
+        if config.trainable_retrieval and retrieval_path != None:
             bge_model = BGEM3FlagModel(retrieval_path, use_fp16=True, device='cuda')
         else:
             bge_model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True, device='cuda')
@@ -312,7 +314,7 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
                         
                     memories_data_task.append(task['task'])
                     memories_data_relation.append(sample['relation'])
-            
+                    
             
         # Embedding memories data
         print(f"Length passage for retrieval: {len(memories_data_text)}")
@@ -336,10 +338,10 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
                     
                 for idx_query, query_text in enumerate(test_data_text):
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
-                    negative = get_values_from_indices(memories_data_text, negative_indices)
+                    negative = get_values_from_indices(memories_data_task, negative_indices)
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    if predict_task == memories_data_task[predict_task]:
+                    if value_task == memories_data_task[predict_task]:
                         count_retrieval += 1
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
@@ -785,7 +787,7 @@ if __name__ == '__main__':
             print(f"Length test current task: {len(test_data_task)}")
             print(f'Current test acc: {cur_acc}')
             print(f'Accuracy test all task: {test_cur}')
-            list_retrieval.append(evaluate_strict_all(config, steps, retrieval_model, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
+            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
             print('---'*23 + f'Finish task {steps}!' + '---'*23 + '\n')
             
             memorized_samples.append({

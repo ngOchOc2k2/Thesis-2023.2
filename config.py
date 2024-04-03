@@ -13,8 +13,8 @@ class Param:
         
         # common parameters
         parser.add_argument("--gpu", default=0, type=int)
-        parser.add_argument("--dataname", default="FewRel", type=str, help="Use TACRED or FewRel datasets.")
-        parser.add_argument("--task_name", default="FewRel", type=str)
+        parser.add_argument("--dataname", default="TACRED", type=str, help="Use TACRED or FewRel datasets.")
+        parser.add_argument("--task_name", default="TACRED", type=str)
         parser.add_argument("--device", default="cuda", type=str)
 
         # training parameters
@@ -29,7 +29,7 @@ class Param:
         parser.add_argument("--save_checkpoint", default="./checkpoint/", type=str)
 
         # epochs
-        parser.add_argument("--classifier_epochs", default=10, type=int)
+        parser.add_argument("--classifier_epochs", default=1, type=int)
 
         # seed
         parser.add_argument("--seed", default=2021, type=int)
@@ -65,13 +65,13 @@ class Param:
         parser.add_argument("--type_similar", default="dense", type=str)
         parser.add_argument("--num_protos", default=10, type=int)
         parser.add_argument("--top_k_negative", default=10, type=int)
-        parser.add_argument("--top_k_retrieval", default=5, type=int)
+        parser.add_argument("--top_k_retrieval", default=10, type=int)
         parser.add_argument("--output_kaggle", default='/kaggle/working', type=str)
         parser.add_argument("--max_length_passage", default=768, type=int)
         parser.add_argument("--max_length_query", default=128, type=int)
         parser.add_argument("--colbert_vecs", default=False, type=bool)
         parser.add_argument("--dense_vecs", default=True, type=bool)
-        parser.add_argument("--trainable_retrieval", default=False, type=bool)
+        parser.add_argument("--trainable_retrieval", default=True, type=bool)
         
         
         # description configs

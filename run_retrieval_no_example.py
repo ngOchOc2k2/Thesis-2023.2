@@ -44,7 +44,6 @@ Example: {example}
 """
 
 
-
 PROMPT_TASK_TACRED_ALL = """The task involves relation extraction for two entities within a given sentence. 
 There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
@@ -232,7 +231,7 @@ def most_frequent_value(array):
 
 
 
-def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel):    
+def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel, retrieval_path=None):    
     
     # If first task
     if steps == 0:      
@@ -275,7 +274,7 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
         data_for_classifier_task = [[] for _ in range(steps + 1)]
         
         # Load model bge
-        if config.trainable_retrieval:
+        if config.trainable_retrieval and retrieval_path != None:
             bge_model = BGEM3FlagModel(retrieval_path, use_fp16=True, device='cuda')
         else:
             bge_model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True, device='cuda')
@@ -336,10 +335,11 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
                     
                 for idx_query, query_text in enumerate(test_data_text):
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
-                    negative = get_values_from_indices(memories_data_text, negative_indices)
+                    negative = get_values_from_indices(memories_data_task, negative_indices)
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    if predict_task == memories_data_task[predict_task]:
+                    # print(f"Predict task: {predict_task}, Memory task: {value_task}")
+                    if value_task == memories_data_task[predict_task]:
                         count_retrieval += 1
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
@@ -388,6 +388,9 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
         
         
 def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations, map_relid2tempid):
+    if len(test_data) == 0:
+        return 0, 0
+    
     data_loader = get_data_loader(config, test_data, batch_size=1)
     encoder.eval()
     classifier.eval()
@@ -609,11 +612,13 @@ if args.dataname == 'FewRel':
     args.rel_per_task = 8 
     args.num_class = 80
     args.max_length_passage = 1024
+    args.batch_size = 32
     args.description_path = "/kaggle/input/data-relation/datasets/standard/description_fewrel.json" 
     
 else:
     args.rel_per_task = 4
     args.num_class = 40
+    args.batch_size = 16
     args.max_length_passage = 768
     args.description_path = "/kaggle/input/data-relation/datasets/standard/description_tacred.json" 
 
@@ -719,22 +724,22 @@ if __name__ == '__main__':
 
 
             # Prepare data for training retrieval
-            data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
-                config, 
-                steps, 
-                bge_m3_path, 
-                current_relations, 
-                description_class, 
-                train_data_for_initial, 
-                memorized_samples, 
-                id2rel
-            )
+            # data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
+            #     config, 
+            #     steps, 
+            #     bge_m3_path, 
+            #     current_relations, 
+            #     description_class, 
+            #     train_data_for_initial, 
+            #     memorized_samples, 
+            #     id2rel
+            # )
             
-            if config.trainable_retrieval:
-                if steps > 0:
-                    train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
-                else:
-                    train_retrieval(config=config, data_path=path_data, model_path=None)
+            # if config.trainable_retrieval:
+            #     if steps > 0:
+            #         train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
+            #     else:
+            #         train_retrieval(config=config, data_path=path_data, model_path=None)
 
             # Get memories data
             this_task_memory = {}
@@ -783,7 +788,7 @@ if __name__ == '__main__':
             print(f"Length test current task: {len(test_data_task)}")
             print(f'Current test acc: {cur_acc}')
             print(f'Accuracy test all task: {test_cur}')
-            list_retrieval.append(evaluate_strict_all(config, steps, retrieval_model, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
+            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
             print('---'*23 + f'Finish task {steps}!' + '---'*23 + '\n')
             
             memorized_samples.append({
