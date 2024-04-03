@@ -341,7 +341,7 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                     negative = get_values_from_indices(memories_data_task, negative_indices)
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    if value_task == memories_data_task[predict_task]:
+                    if value_task == task:
                         count_retrieval += 1
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
@@ -733,6 +733,7 @@ if __name__ == '__main__':
                 memorized_samples, 
                 id2rel
             )
+            
             
             if config.trainable_retrieval:
                 if steps > 0:
