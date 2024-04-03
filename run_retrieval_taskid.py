@@ -27,7 +27,6 @@ color_number = '\033[93m'
 color_reset = '\033[0m'
 
 
-
 PROMPT_TASK_TACRED = """The task involves relation extraction for two entities within a given sentence. 
 There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
@@ -42,8 +41,6 @@ The goal is to classify the relationship between the entities into one of these 
 {relation}
 Example: {example}
 """
-
-
 
 
 
@@ -314,6 +311,7 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                         
                     memories_data_task.append(task['task'])
                     memories_data_relation.append(sample['relation'])
+
                     
             
         # Embedding memories data
@@ -336,16 +334,25 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                 result = embedding_test_data['dense_vecs'] @ embedding_memories_data['dense_vecs'].T
                 result = result.tolist()
                     
-                for idx_query, query_text in enumerate(test_data_text):
+                for idx_query, query_text in enumerate(result):
+                    
+                    # Get top k indices have the most similar score
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
+                    
+                    # Get values from top k indices above
                     negative = get_values_from_indices(memories_data_task, negative_indices)
+                    
+                    # Get task value have the most frequent
                     value_task, predict_task = most_frequent_value(negative)
                     
                     if value_task == task:
                         count_retrieval += 1
+                        print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
-
+                    else:
+                        print(f"Task: {task}, Wrong predict task: {value_task}")
+                    
             result_retrieval.append(count_retrieval / len(test_data_text))
       
       
@@ -390,6 +397,9 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
         
         
 def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations, map_relid2tempid):
+    if len(test_data) == 0:
+        return 0, 0
+    
     data_loader = get_data_loader(config, test_data, batch_size=1)
     encoder.eval()
     classifier.eval()
@@ -702,6 +712,7 @@ if __name__ == '__main__':
             ############################################################################################################
     
     
+    
             test_data_task = []
             for relation in current_relations:
                 test_data_task += test_fix_data[relation]
@@ -723,23 +734,26 @@ if __name__ == '__main__':
 
 
             # Prepare data for training retrieval
-            data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
-                config, 
-                steps, 
-                bge_m3_path, 
-                current_relations, 
-                description_class, 
-                train_data_for_initial, 
-                memorized_samples, 
-                id2rel
-            )
-            
             
             if config.trainable_retrieval:
+                    
+                data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
+                    config, 
+                    steps, 
+                    bge_m3_path, 
+                    current_relations, 
+                    description_class, 
+                    train_data_for_initial, 
+                    memorized_samples, 
+                    id2rel
+                )
+            
+            
                 if steps > 0:
                     train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
                 else:
                     train_retrieval(config=config, data_path=path_data, model_path=None)
+
 
             # Get memories data
             this_task_memory = {}
@@ -755,7 +769,7 @@ if __name__ == '__main__':
             data_for_retrieval.append({
                 'relations_task': current_relations,
                 'data': this_task_memory,
-                'task': len(memorized_samples)
+                'task': steps,
             })
             
             
