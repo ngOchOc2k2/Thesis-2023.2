@@ -16,6 +16,9 @@ from FlagEmbedding import BGEM3FlagModel
 from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
 import logging
 from collections import Counter
+import subprocess
+import os
+
 
 
 logger = logging.getLogger(__name__)
@@ -348,11 +351,11 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                     # if value_task == task:
                     if task == negative[predict_task]:
                         count_retrieval += 1
-                        print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
+                        # print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
-                    else:
-                        print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
+                    # else:
+                        # print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
                     
             result_retrieval.append(count_retrieval / len(test_data_text))
       
@@ -603,13 +606,14 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
     print(f"Length data train retrieval: {len(data_train)}")
     print("---" * 25 + 'Saving data train retrieval!' + "---" * 25 + '\n')
     random.shuffle(data_train)
-    save_jsonl(data=data_train, filename=f'./train_step_{steps}.jsonl')
-    return data_train, f'/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
+    save_jsonl(data=data_train, filename=f'/kaggle/working/train_step_{steps}.jsonl')
+    return data_train, f'/kaggle/working/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
 
 
 
 param = Param()
 args = param.args
+
 
 # Device
 torch.cuda.set_device(args.gpu)
@@ -638,7 +642,10 @@ if __name__ == '__main__':
 
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
-    
+    path = '/kaggle/working/results'
+    if os.path.exists(path):
+        os.mkdir(path)
+
     
     for rou in range(config.total_round):
         random.seed(config.seed + rou*100)
@@ -728,11 +735,11 @@ if __name__ == '__main__':
                 config.classifier_epochs, 
                 map_relid2tempid,
                 test_data_task,
-                seen_relations,
+                seen_relations, 
                 steps,
             )
 
-
+            torch.cuda.empty_cache()
 
             # Prepare data for training retrieval
             retrieval_model = None
@@ -751,9 +758,66 @@ if __name__ == '__main__':
             
             
                 if steps > 0:
-                    train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
+                    command = [
+                        "torchrun",
+                        "--nproc_per_node", "1",
+                        "-m", "FlagEmbedding.BGE_M3.run",
+                        "--output_dir", "./model_bge",
+                        "--model_name_or_path", "/kaggle/working/model_bge",
+                        "--train_data", "/kaggle/working/",
+                        "--learning_rate", "1e-5",
+                        "--fp16",
+                        "--num_train_epochs", "2",
+                        "--per_device_train_batch_size", "1",
+                        "--dataloader_drop_last",
+                        "--normlized",
+                        "--temperature", "0.02",
+                        "--query_max_len", "128",
+                        "--passage_max_len", "768 ",
+                        "--train_group_size", "1",
+                        "--negatives_cross_device",
+                        "--logging_steps", "20",
+                        "--save-total-limit", "1",
+                        "--save-steps", "20000",
+                        "--same_task_within_batch",
+                        "--unified_finetuning",
+                        "--use_self_distill"
+                    ]
+                    subprocess.run(command)
                 else:
-                    train_retrieval(config=config, data_path=path_data, model_path=None)
+                    command = [
+                        "torchrun",
+                        "--nproc_per_node", "1",
+                        "-m", "FlagEmbedding.BGE_M3.run",
+                        "--output_dir", "./model_bge",
+                        "--model_name_or_path", "BAAI/bge-m3",
+                        "--train_data", "/kaggle/working/",
+                        "--learning_rate", "1e-5",
+                        "--fp16",
+                        "--num_train_epochs", "2",
+                        "--per_device_train_batch_size", "1",
+                        "--dataloader_drop_last",
+                        "--normlized",
+                        "--temperature", "0.02",
+                        "--query_max_len", "128",
+                        "--passage_max_len", "768",
+                        "--train_group_size", "1",
+                        "--negatives_cross_device",
+                        "--logging_steps", "10",
+                        "--same_task_within_batch",
+                        "--unified_finetuning",
+                        "--use_self_distill"
+                    ]
+                    subprocess.run(command)
+                
+            
+            # if config.trainable_retrieval:
+            #     if steps > 0:
+            #         train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
+            #     else:
+            #         train_retrieval(config=config, data_path=path_data, model_path=None)
+
+
 
 
             # Get memories data
@@ -812,6 +876,6 @@ if __name__ == '__main__':
                 'task': len(memorized_samples)
             })
             
-            json.dump(list_retrieval, open(f'./task_{steps}.json', 'w'), ensure_ascii=False)
+            json.dump(list_retrieval, open(config.output_kaggle + f'/results/task_{steps}.json', 'w'), ensure_ascii=False)
             
         print(f"Finish result: {list_retrieval}")

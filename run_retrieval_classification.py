@@ -4,7 +4,6 @@ from methods.backbone import Bert_LoRa, Classifier_Layer
 from dataloaders.data_loader import get_data_loader
 from sklearn.cluster import KMeans
 from dataloaders.sampler import data_sampler
-import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
@@ -14,15 +13,12 @@ from tqdm import tqdm
 import logging
 from config import Param
 from FlagEmbedding import BGEM3FlagModel
-from FlagEmbedding.baai_general_embedding.finetune import BiEncoderModel, BiTrainer
-from FlagEmbedding.baai_general_embedding.finetune.data import TrainDatasetForEmbedding, EmbedCollator
 from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
-from transformers import AutoConfig, AutoTokenizer
-from transformers import set_seed
 import logging
-import os
-from pathlib import Path
 from collections import Counter
+import subprocess
+import os
+
 
 
 logger = logging.getLogger(__name__)
@@ -34,16 +30,25 @@ color_number = '\033[93m'
 color_reset = '\033[0m'
 
 
-
 PROMPT_TASK_TACRED = """The task involves relation extraction for two entities within a given sentence. 
-There are five classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
+There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
 {relation}
 Example: {example}
 """
 
+
+PROMPT_TASK_FEWREL = """The task involves relation extraction for two entities within a given sentence. 
+There are eight classes: {re1}, {re2}, {re3}, {re4}, {re5}, {re6}, {re7}, {re8} each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+{relation}
+Example: {example}
+"""
+
+
+
 PROMPT_TASK_TACRED_ALL = """The task involves relation extraction for two entities within a given sentence. 
-There are five classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
+There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
 {relation1}
 {relation2}
@@ -53,9 +58,9 @@ Example {example_relation}: {example}
 """
 
 
-
 PROMPT_NO_RELATION = """In the extracted passage, tokens [E11], [E12], [E21], [E22] appear to mark the positions of entities. However, the words or phrases between them are not linked or refer to any relationship between these entities.
 Example: {example}"""
+
 
 def set_seed_classifier(config, seed):
     config.n_gpu = torch.cuda.device_count()
@@ -81,7 +86,6 @@ class CELoss(nn.Module):
 
 
 
-
 def save_jsonl(filename, data):
     with open(filename, 'w') as f:
         for item in data:
@@ -89,7 +93,6 @@ def save_jsonl(filename, data):
             f.write('\n')
             
             
-    
 def save_model(config, lora_model, classifier_model, file_name, task):
     lora_model.save_lora('./' + config.save_checkpoint + file_name)
     torch.save(classifier_model, './' + config.save_checkpoint + file_name + f'/checkpoint_task_{task}.pt')
@@ -139,17 +142,16 @@ def select_data(config, encoder, relation_dataset):
 
 
 
-
 def train_simple_model(config, encoder, classifier, training_data, epochs, map_relid2tempid, test_data, seen_relations, steps):
     data_loader = get_data_loader(config, training_data, shuffle=True)
     encoder.train()
     classifier.train()
 
     optim_acc = 0.0
-    criterion = CELoss()
+    criterion = CELoss(temperature=config.kl_temp)
     optimizer = optim.Adam([
-        {'params': encoder.parameters(), 'lr': 0.0001},
-        {'params': classifier.parameters(), 'lr': 0.001}
+        {'params': encoder.parameters(), 'lr': config.lr_encoder},
+        {'params': classifier.parameters(), 'lr': config.lr_classifier}
     ])
     
     for epoch_i in range(epochs):
@@ -162,12 +164,11 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             
             labels = torch.tensor(labels).to(config.device)
             tokens = torch.stack([x.to(config.device) for x in tokens], dim=0)
-            reps = encoder(tokens)
-
-            logits = classifier(reps)
-
-            loss = criterion(pros=logits, label=labels)    
             
+            reps = encoder(tokens)
+            logits = classifier(reps)
+            loss = criterion(pros=logits, label=labels)    
+
             losses.append(loss.item())
             loss.backward()
             optimizer.step()
@@ -178,6 +179,8 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             + f"{color_loss}Loss:{color_reset} {color_number}{np.array(losses).mean()}{color_reset}," 
             + f"{color_epoch}Accuracy:{color_reset} {color_number}{acc}{color_reset}")
 
+
+        # Get best model 
         if acc >= optim_acc:
             optim_acc = acc
             state_classifier = {
@@ -188,40 +191,6 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
             save_model(config, encoder, state_classifier, path_save, steps)
 
     return optim_acc
-
-def construct_hard_triplets(output, labels, relation_data):
-    positive = []
-    negative = []
-    pdist = nn.PairwiseDistance(p=2)
-    for rep, label in zip(output, labels):
-        positive_relation_data = relation_data[label.item()]
-        negative_relation_data = []
-        for key in relation_data.keys():
-            if key != label.item():
-                negative_relation_data.extend(relation_data[key])
-        positive_distance = torch.stack([pdist(rep.cpu(), p) for p in positive_relation_data])
-        negative_distance = torch.stack([pdist(rep.cpu(), n) for n in negative_relation_data])
-        positive_index = torch.argmax(positive_distance)
-        negative_index = torch.argmin(negative_distance)
-        positive.append(positive_relation_data[positive_index.item()])
-        negative.append(negative_relation_data[negative_index.item()])
-
-
-    return positive, negative
-
-
-def batch2device(batch_tuple, device):
-    ans = []
-    for var in batch_tuple:
-        if isinstance(var, torch.Tensor):
-            ans.append(var.to(device))
-        elif isinstance(var, list):
-            ans.append(batch2device(var))
-        elif isinstance(var, tuple):
-            ans.append(tuple(batch2device(var)))
-        else:
-            ans.append(var)
-    return ans
 
 
 
@@ -265,15 +234,16 @@ def most_frequent_value(array):
 
 
 
-def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_data, list_map_relid2tempid, description, id2rel):    
-    # if first task
+def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel, retrieval_path=None):    
+    
+    # If first task
     if steps == 0:      
         result_retrieval, result_classifier, result_total = [], [], []
         
         map_relid2tempid = list_map_relid2tempid[steps]
-        encoder = Bert_LoRa(config=config, path_adapter=f'/kaggle/working/checkpoint/checkpoint_task_{steps}').to(config.device)
+        encoder = Bert_LoRa(config=config, path_adapter=config.checkpoint_kaggle + f'/checkpoint_task_{steps}').to(config.device)
         clasifier = Classifier_Layer(config=config, num_class=config.rel_per_task).to(config.device)
-        clasifier.load_state_dict(torch.load(f'/kaggle/working/checkpoint/checkpoint_task_{steps}/checkpoint_task_{steps}.pt')['state_dict'])
+        clasifier.load_state_dict(torch.load(config.checkpoint_kaggle + f'/checkpoint_task_{steps}/checkpoint_task_{steps}.pt')['state_dict'])
         
 
         accuracy_classifier, count_accuracy = evaluate_strict_model(
@@ -299,20 +269,23 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
             'total': result_total,
         }
         
-    # if task > 0
+        
+    # If task > 0
     else:
         result_retrieval, result_classifier = [], []
         result_total = [0 for _ in range(steps + 1)]
         data_for_classifier_task = [[] for _ in range(steps + 1)]
         
         # Load model bge
-        bge_model = BGEM3FlagModel(retrieval_path, use_fp16=True, device='cuda')
-        # bge_model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True, device='cuda')
+        if config.trainable_retrieval and retrieval_path != None:
+            bge_model = BGEM3FlagModel(retrieval_path, use_fp16=True, device='cuda')
+        else:
+            bge_model = BGEM3FlagModel('BAAI/bge-m3', use_fp16=True, device='cuda')
         
         
         memories_data_text, memories_data_task, memories_data_relation = [], [], []
         
-        for task in memories_data:
+        for task in data_for_retrieval:
             for keys, values in enumerate(task['data']):
                 for sample in task['data'][values]:
                     if config.task_name == 'TACRED':
@@ -324,59 +297,78 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
                                 'relation': description[id2rel[sample['relation']]],
                                 'example': sample['text']
                             }))
-                        memories_data_task.append(task['task'])
-                        memories_data_relation.append(sample['relation'])
+                        
+                    else:
+                        memories_data_text.append(PROMPT_TASK_FEWREL.format_map({
+                                're1': task['relations_task'][-8],
+                                're2': task['relations_task'][-7],
+                                're3': task['relations_task'][-6],
+                                're4': task['relations_task'][-5],
+                                're5': task['relations_task'][-4],
+                                're6': task['relations_task'][-3],
+                                're7': task['relations_task'][-2],
+                                're8': task['relations_task'][-1],
+                                'relation': description[id2rel[sample['relation']]],
+                                'example': sample['text']
+                            }))
+                        
+                    memories_data_task.append(task['task'])
+                    memories_data_relation.append(sample['relation'])
+
+                    
             
         # Embedding memories data
         print(f"Length passage for retrieval: {len(memories_data_text)}")
-        embedding_memories_data = bge_model.encode(memories_data_text, max_length=config.max_length_passage, return_dense=True, return_colbert_vecs=True)
+        embedding_memories_data = bge_model.encode(memories_data_text, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
         count_true_retrieval_total, count_total_text_data = 0, 0
         count_true_classifier_total, count_total_text_classifier = 0, 0
         
-        # count_acc_per_relation = {}
-        # for task, test_data in enumerate(test_data_all):
-        #     for item in test_data:
-        #         count_acc_per_relation[id2rel[item['relation']]] = {
-        #             'true': 0,
-        #             'total': len(test_data)
-        #         }
             
         for task, test_data in enumerate(test_data_all):
             count_retrieval = 0
             test_data_text = [sample['text'] for sample in test_data['data']]
-            test_data_relation = [sample['relation'] for sample in test_data['data']]
             count_total_text_data += len(test_data_text)
 
             
-            if config.type_similar == 'colbert':
+            if config.type_similar == 'dense':
+                
                 # Embedding test data
-                embedding_test_data = bge_model.encode(test_data_text, max_length=config.max_length_query, return_dense=True, return_colbert_vecs=True)
+                embedding_test_data = bge_model.encode(test_data_text, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
                 result = embedding_test_data['dense_vecs'] @ embedding_memories_data['dense_vecs'].T
                 result = result.tolist()
                     
-                for idx_query, query_text in enumerate(test_data_text):
+                for idx_query, query_text in enumerate(result):
+                    
+                    # Get top k indices have the most similar score
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
-                    negative = get_values_from_indices(memories_data_text, negative_indices)
+                    
+                    # Get values from top k indices above
+                    negative = get_values_from_indices(memories_data_task, negative_indices)
+                    
+                    # Get task value have the most frequent
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    if predict_task == memories_data_task[predict_task]:
+                    # if value_task == task:
+                    if task == negative[predict_task]:
                         count_retrieval += 1
+                        print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
-
+                    else:
+                        print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
+                    
             result_retrieval.append(count_retrieval / len(test_data_text))
       
       
-        # eval classifier 
+        # Eval classifier 
         for steps, data_task in enumerate(data_for_classifier_task):
             map_relid2tempid = list_map_relid2tempid[steps]
-            id_relation = list(map_relid2tempid.keys())
             count_total_text_classifier += len(data_task)
             
             
-            encoder = Bert_LoRa(config=config, path_adapter=f'/kaggle/working/checkpoint/checkpoint_task_{steps}').to(config.device)
-            clasifier = Classifier_Layer(config=config, num_class=steps * 4 + 4).to(config.device)
-            clasifier.load_state_dict(torch.load(f'/kaggle/working/checkpoint/checkpoint_task_{steps}/checkpoint_task_{steps}.pt')['state_dict'])
+            encoder = Bert_LoRa(config=config, path_adapter=config.checkpoint_kaggle +  f'/checkpoint_task_{steps}').to(config.device)
+            clasifier = Classifier_Layer(config=config, num_class=steps * config.rel_per_task + config.rel_per_task).to(config.device)
+            clasifier.load_state_dict(torch.load(config.checkpoint_kaggle + f'/checkpoint_task_{steps}/checkpoint_task_{steps}.pt')['state_dict'])
             
             accuracy_classifier, count_accuracy = evaluate_strict_model(
                 config,
@@ -401,7 +393,6 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
             'task': steps,
             'retrieval': result_retrieval,
             'classifier': result_classifier,
-            'total': result_total,
             'mean_retrieval': count_true_retrieval_total / count_total_text_data,
             'mean_classifier': count_true_classifier_total / count_total_text_classifier,
             'mean_total': count_true_classifier_total / count_total_text_data
@@ -410,6 +401,9 @@ def evaluate_strict_all(config, steps, retrieval_path, test_data_all, memories_d
         
         
 def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations, map_relid2tempid):
+    if len(test_data) == 0:
+        return 0, 0
+    
     data_loader = get_data_loader(config, test_data, batch_size=1)
     encoder.eval()
     classifier.eval()
@@ -440,14 +434,14 @@ def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations
 
 
 
-
-
 def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, description, current_data, memory_data, id2rel):
     retrieval_model = BGEM3FlagModel(bge_m3, use_fp16=True, device='cuda')
     
     print("---" * 23 + 'Preparing data for training retrieval model!' + "---" * 23 + '\n')
     data_train = []
     
+    
+    # If first task
     if steps == 0:
         no_relation = json.load(open(config.data_path + config.no_relation, 'r'))
         no_relation_text = [PROMPT_NO_RELATION.format_map({'example': " ".join(item["tokens"])}) for item in no_relation]
@@ -455,10 +449,12 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
         query = [item['text'] for item in current_data]
         task_relation = [item['relation'] for item in current_data]
         
-        embedding_query = retrieval_model.encode(query, max_length=config.max_length_query, return_dense=True, return_colbert_vecs=True)
-        embedding_neg = retrieval_model.encode(no_relation_text, max_length=config.max_length_passage, return_dense=True, return_colbert_vecs=True)
+        
+        # Embedding query and no relation data
+        embedding_query = retrieval_model.encode(query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+        embedding_neg = retrieval_model.encode(no_relation_text, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
 
-        if config.type_similar == 'colbert':
+        if config.type_similar == 'dense':
             result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
             result = result.tolist()
             
@@ -470,14 +466,29 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                 
                 for sample in current_data:
                     if sample['text'] != query_text and sample['relation'] == task_relation[idx_query]:
-                        positive = PROMPT_TASK_TACRED.format_map({
-                            're1': current_relation[0],
-                            're2': current_relation[1],
-                            're3': current_relation[2],
-                            're4': current_relation[3],
-                            'relation': description[id2rel[sample['relation']]],
-                            'example': sample['text']
-                        })
+                        if config.task_name == 'TACRED':
+                            positive = PROMPT_TASK_TACRED.format_map({
+                                're1': current_relation[0],
+                                're2': current_relation[1],
+                                're3': current_relation[2],
+                                're4': current_relation[3],
+                                'relation': description[id2rel[sample['relation']]],
+                                'example': sample['text']
+                            })
+                        else:
+                            positive = PROMPT_TASK_FEWREL.format_map({
+                                're1': current_relation[0],
+                                're2': current_relation[1],
+                                're3': current_relation[2],
+                                're4': current_relation[3],
+                                're5': current_relation[4],
+                                're6': current_relation[5],
+                                're7': current_relation[6],
+                                're8': current_relation[7],
+                                'relation': description[id2rel[sample['relation']]],
+                                'example': sample['text']
+                            })
+                            
                         data_train.append({
                             'query': query_text,
                             'pos': [positive],
@@ -486,6 +497,7 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                         break
     
     
+    # If task > 0
     else:
         current_data_for_relation = {}
         for relation in current_relation:
@@ -518,19 +530,36 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                 if task != task_neg:
                     neg_relation = memory_data[task_neg]['relations_task']
                     for keys, re_task in enumerate(memory_data[task_neg]['data']):
-                        neg_query += [PROMPT_TASK_TACRED.format_map({
-                                're1': neg_relation[0],
-                                're2': neg_relation[1],
-                                're3': neg_relation[2],
-                                're4': neg_relation[3],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                        }) for sample in memory_data[task_neg]['data'][re_task]]
+                        if config.task_name == 'TACRED':
+                            neg_query += [PROMPT_TASK_TACRED.format_map({
+                                    're1': neg_relation[0],
+                                    're2': neg_relation[1],
+                                    're3': neg_relation[2],
+                                    're4': neg_relation[3],
+                                    'relation': description[id2rel[sample['relation']]],
+                                    'example': sample['text']
+                            }) for sample in memory_data[task_neg]['data'][re_task]]
+                        else:
+                            neg_query += [PROMPT_TASK_FEWREL.format_map({
+                                    're1': neg_relation[0],
+                                    're2': neg_relation[1],
+                                    're3': neg_relation[2],
+                                    're4': neg_relation[3],
+                                    're5': neg_relation[4],
+                                    're6': neg_relation[5],
+                                    're7': neg_relation[6],
+                                    're8': neg_relation[7],
+                                    'relation': description[id2rel[sample['relation']]],
+                                    'example': sample['text']
+                            }) for sample in memory_data[task_neg]['data'][re_task]]   
 
-            embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=True, return_colbert_vecs=True)
-            embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=True, return_colbert_vecs=True)  
 
-            if config.type_similar == 'colbert':
+
+            # Embedding query and negative 
+            embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+            embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)  
+
+            if config.type_similar == 'dense':
                 result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
                 result = result.tolist()
                 
@@ -542,15 +571,30 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                     
                     for sample in original_this_task:
                         if sample['text'] != query_text and sample['relation'] == task_relation[idx_query]:
-                            positive = PROMPT_TASK_TACRED.format_map({
-                                're1': this_list_relation[0],
-                                're2': this_list_relation[1],
-                                're3': this_list_relation[2],
-                                're4': this_list_relation[3],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                            })
-                            
+                            if config.task_name == 'TACRED':
+                                positive = PROMPT_TASK_TACRED.format_map({
+                                    're1': this_list_relation[0],
+                                    're2': this_list_relation[1],
+                                    're3': this_list_relation[2],
+                                    're4': this_list_relation[3],
+                                    'relation': description[id2rel[sample['relation']]],
+                                    'example': sample['text']
+                                })
+                            else:
+                                positive = PROMPT_TASK_FEWREL.format_map({
+                                    're1': this_list_relation[0],
+                                    're2': this_list_relation[1],
+                                    're3': this_list_relation[2],
+                                    're4': this_list_relation[3],
+                                    're5': this_list_relation[4],
+                                    're6': this_list_relation[5],
+                                    're7': this_list_relation[6],
+                                    're8': this_list_relation[7],
+                                    'relation': description[id2rel[sample['relation']]],
+                                    'example': sample['text']
+                                })
+                                
+                                
                             data_train.append({
                                 'query': query_text,
                                 'pos': [positive],
@@ -562,34 +606,48 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
     print(f"Length data train retrieval: {len(data_train)}")
     print("---" * 25 + 'Saving data train retrieval!' + "---" * 25 + '\n')
     random.shuffle(data_train)
-    save_jsonl(data=data_train, filename=f'./train_step_{steps}.jsonl')
-    return data_train, f'/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
+    save_jsonl(data=data_train, filename=f'/kaggle/working/train_step_{steps}.jsonl')
+    return data_train, f'/kaggle/working/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
 
 
 
 param = Param()
 args = param.args
 
+
 # Device
 torch.cuda.set_device(args.gpu)
 args.device = torch.device(args.device)
 args.n_gpu = torch.cuda.device_count()
 args.task_name = args.dataname
-args.rel_per_task = 8 if args.dataname == "FewRel" else 4
-args.num_class = 80 if args.dataname == "FewRel" else 4
+
+
+if args.dataname == 'FewRel':
+    args.rel_per_task = 8 
+    args.num_class = 80
+    args.max_length_passage = 1024
+    args.batch_size = 32
+    args.description_path = "/kaggle/input/data-relation/datasets/standard/description_fewrel.json" 
+    
+else:
+    args.rel_per_task = 4
+    args.num_class = 40
+    args.batch_size = 16
+    args.max_length_passage = 768
+    args.description_path = "/kaggle/input/data-relation/datasets/standard/description_tacred.json" 
+
     
 if __name__ == '__main__':
     config = args
 
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
-    config.total_round = 1
-    
+    path = '/kaggle/working/results'
+    if os.path.exists(path):
+        os.mkdir(path)
+
     
     for rou in range(config.total_round):
-        test_cur = []
-        test_total = []
-        
         random.seed(config.seed + rou*100)
         sampler = data_sampler(config, seed=config.seed + rou*100)
         id2rel = sampler.id2rel
@@ -599,21 +657,14 @@ if __name__ == '__main__':
         num_class = len(sampler.id2rel)
         memorized_samples = []
         memory = collections.defaultdict(list)
-        history_relations = []
-        history_data = []
-        prev_relations = []
+        history_relations, list_map_relid2tempid = [], []
+        history_data, prev_relations = [], []
+        test_cur, test_total = [], []
         classifier = None
-        prev_classifier = None
-        prev_encoder = None
-        prev_dropout_layer = None
-        relation_standard = {}
-        forward_accs = []
-        total_acc = []
-        all_test_data = []
-        list_map_relid2tempid = []
-        list_retrieval = []
+        relation_standard, description_class = {}, {}
+        total_acc, all_test_data = [], []
+        data_for_retrieval, list_retrieval = [], []
         description_original = json.load(open(config.description_path, 'r'))
-        description_class = {}
         
         
         for sample in description_original:
@@ -629,7 +680,8 @@ if __name__ == '__main__':
                 training_fix_data[relation], test_fix_data[relation] = [], []
                 history_relations.append(relation)
                 
-                # Remove data without token entity
+                
+                # Remove data without entity tokens
                 for item in training_data[relation]:
                     item['task'] = steps
                     if 30522 in item['tokens'] and 30523 in item['tokens'] and 30524 in item['tokens'] and 30525 in item['tokens']: 
@@ -649,14 +701,15 @@ if __name__ == '__main__':
             temp_rel2id = [rel2id[x] for x in seen_relations]
             map_relid2tempid = {k: v for v, k in enumerate(temp_rel2id)}
 
+
+            ################################# Prepare Bert and Classifier model #######################################
             encoder = Bert_LoRa(config=config).to(config.device)
 
             for name, param in encoder.encoder.named_parameters():
-                if name.find("loranew_") != -1:
+                if name.find("lora") != -1:
                     param.requires_grad = True
                 else: 
                     param.requires_grad = False
-                                 
             
             def count_trainable_params(model):
                 return sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -664,6 +717,9 @@ if __name__ == '__main__':
             print(f'Tranable Params: {count_trainable_params(encoder)}')
             
             classifier = Classifier_Layer(config=config, num_class=len(history_relations)).to(config.device)
+            ############################################################################################################
+    
+    
     
             test_data_task = []
             for relation in current_relations:
@@ -679,50 +735,116 @@ if __name__ == '__main__':
                 config.classifier_epochs, 
                 map_relid2tempid,
                 test_data_task,
-                seen_relations,
+                seen_relations, 
                 steps,
             )
 
+            torch.cuda.empty_cache()
 
             # Prepare data for training retrieval
-            data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
-                config, 
-                steps, 
-                bge_m3_path, 
-                current_relations, 
-                description_class, 
-                train_data_for_initial, 
-                memorized_samples, 
-                id2rel
-            )
+            retrieval_model = None
             
-            if steps > 0:
-                train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
-            else:
-                train_retrieval(config=config, data_path=path_data, model_path=None)
+            if config.trainable_retrieval: 
+                data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
+                    config, 
+                    steps, 
+                    bge_m3_path, 
+                    current_relations, 
+                    description_class, 
+                    train_data_for_initial, 
+                    memorized_samples, 
+                    id2rel
+                )
+            
+            
+                if steps > 0:
+                    # Define the command with arguments
+                    command = [
+                        "torchrun",
+                        "--nproc_per_node", "2",
+                        "-m", "FlagEmbedding.BGE_M3.run",
+                        "--output_dir", "./model_bge",
+                        "--model_name_or_path", "/kaggle/working/model_bge",
+                        "--train_data", "/kaggle/working/",
+                        "--learning_rate", "1e-5",
+                        "--fp16",
+                        "--num_train_epochs", "2",
+                        "--per_device_train_batch_size", "1",
+                        "--dataloader_drop_last",
+                        "--normlized",
+                        "--temperature", "0.02",
+                        "--query_max_len", "128",
+                        "--passage_max_len", "768 ",
+                        "--train_group_size", "2",
+                        "--negatives_cross_device",
+                        "--logging_steps", "20",
+                        "--same_task_within_batch",
+                        "--unified_finetuning",
+                        "--use_self_distill"
+                    ]
+                    subprocess.run(command)
+                else:
+                    # Define the command with arguments
+                    command = [
+                        "torchrun",
+                        "--nproc_per_node", "2",
+                        "-m", "FlagEmbedding.BGE_M3.run",
+                        "--output_dir", "./model_bge",
+                        "--model_name_or_path", "BAAI/bge-m3",
+                        "--train_data", "/kaggle/working/",
+                        "--learning_rate", "1e-5",
+                        "--fp16",
+                        "--num_train_epochs", "2",
+                        "--per_device_train_batch_size", "1",
+                        "--dataloader_drop_last",
+                        "--normlized",
+                        "--temperature", "0.02",
+                        "--query_max_len", "128",
+                        "--passage_max_len", "768",
+                        "--train_group_size", "2",
+                        "--negatives_cross_device",
+                        "--logging_steps", "10",
+                        "--same_task_within_batch",
+                        "--unified_finetuning",
+                        "--use_self_distill"
+                    ]
+                    subprocess.run(command)
+
 
             # Get memories data
             this_task_memory = {}
+            
+            
             
             print('---'*23 + 'Get memories data!' + '---'*23 + '\n')
             for relation in current_relations:
                 this_task_memory[relation] = select_data(config, encoder, training_fix_data[relation])
 
-
             
+            # Add data to memories
+            data_for_retrieval.append({
+                'relations_task': current_relations,
+                'data': this_task_memory,
+                'task': steps,
+            })
+            
+            
+            # Get data test full task
             all_test_data.append({
                 'data': test_data_task, 
                 'task': steps,
                 'seen_relation': history_relations,
                 'current_relation': current_relations,
             })
-
+            
             
             temp_rel2id = [rel2id[x] for x in history_relations]
             map_relid2tempid = {k: v for v, k in enumerate(temp_rel2id)}
             list_map_relid2tempid.append(map_relid2tempid) 
             print(f"Task {steps}: {list_map_relid2tempid}")
             
+            
+
             cur_acc = max(cur_acc, evaluate_strict_model(config, encoder, classifier, test_data_task, seen_relations, map_relid2tempid)[0])
             test_cur.append(cur_acc)
             total_acc.append(cur_acc)
@@ -736,16 +858,15 @@ if __name__ == '__main__':
             print(f"Length test current task: {len(test_data_task)}")
             print(f'Current test acc: {cur_acc}')
             print(f'Accuracy test all task: {test_cur}')
-            list_retrieval.append(evaluate_strict_all(config, steps, retrieval_model, all_test_data, memorized_samples, list_map_relid2tempid, description_class, id2rel))
+            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel, retrieval_path=retrieval_model))
             print('---'*23 + f'Finish task {steps}!' + '---'*23 + '\n')
             
-            # add data to memories
             memorized_samples.append({
                 'relations_task': current_relations,
                 'data': this_task_memory,
                 'task': len(memorized_samples)
             })
             
-            json.dump(list_retrieval, open(f'./task_{steps}.json', 'w'), ensure_ascii=False)
+            json.dump(list_retrieval, open(f'./results/task_{steps}.json', 'w'), ensure_ascii=False)
             
         print(f"Finish result: {list_retrieval}")
