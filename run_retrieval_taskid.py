@@ -13,12 +13,10 @@ from tqdm import tqdm
 import logging
 from config import Param
 from FlagEmbedding import BGEM3FlagModel
-from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
+# from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
+from FlagEmbedding.reranker.run import train_retrieval
 import logging
 from collections import Counter
-import subprocess
-import os
-
 
 
 logger = logging.getLogger(__name__)
@@ -39,7 +37,7 @@ Example: {example}
 
 
 PROMPT_TASK_FEWREL = """The task involves relation extraction for two entities within a given sentence. 
-There are eight classes: {re1}, {re2}, {re3}, {re4}, {re5}, {re6}, {re7}, {re8} each representing different types of relationships that can exist between the two entities. 
+There are eight classes: {re1}, {re2}, {re3}, {re4}, {re5}, {re6}, {re7}, {re8}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
 {relation}
 Example: {example}
@@ -61,6 +59,18 @@ Example {example_relation}: {example}
 PROMPT_NO_RELATION = """In the extracted passage, tokens [E11], [E12], [E21], [E22] appear to mark the positions of entities. However, the words or phrases between them are not linked or refer to any relationship between these entities.
 Example: {example}"""
 
+
+PROMPT_NEGATIVE = """The task involves relation extraction for two entities within a given sentence. 
+There are four classes: place served by transport hub, located on terrain feature, religion, participating team, each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+{relation}
+Example: {example}
+"""
+
+
+
+
+REMOVE_TOKEN = ['[E11]', '[E12]', '[E21]', '[E22]', '-rrb-', '-lrb-']
 
 def set_seed_classifier(config, seed):
     config.n_gpu = torch.cuda.device_count()
@@ -314,7 +324,34 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                         
                     memories_data_task.append(task['task'])
                     memories_data_relation.append(sample['relation'])
+            
+            # for keys, values in enumerate(task['data']):
+            #     for relation in task['relations_task']:
+            #         if config.task_name == 'TACRED':
+            #             memories_data_text.append(PROMPT_TASK_TACRED.format_map({
+            #                     're1': task['relations_task'][-4],
+            #                     're2': task['relations_task'][-3],
+            #                     're3': task['relations_task'][-2],
+            #                     're4': task['relations_task'][-1],
+            #                     'relation': description[relation],
+            #                 }))
+                        
+            #         else:
+            #             memories_data_text.append(PROMPT_TASK_FEWREL.format_map({
+            #                     're1': task['relations_task'][-8],
+            #                     're2': task['relations_task'][-7],
+            #                     're3': task['relations_task'][-6],
+            #                     're4': task['relations_task'][-5],
+            #                     're5': task['relations_task'][-4],
+            #                     're6': task['relations_task'][-3],
+            #                     're7': task['relations_task'][-2],
+            #                     're8': task['relations_task'][-1],
+            #                     'relation': description[relation],
 
+            #                 }))
+                        
+            #         memories_data_task.append(task['task'])
+            #         memories_data_relation.append(sample['relation'])
                     
             
         # Embedding memories data
@@ -337,26 +374,16 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
                 result = embedding_test_data['dense_vecs'] @ embedding_memories_data['dense_vecs'].T
                 result = result.tolist()
                     
-                for idx_query, query_text in enumerate(result):
-                    
-                    # Get top k indices have the most similar score
+                for idx_query, query_text in enumerate(test_data_text):
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
-                    
-                    # Get values from top k indices above
                     negative = get_values_from_indices(memories_data_task, negative_indices)
-                    
-                    # Get task value have the most frequent
                     value_task, predict_task = most_frequent_value(negative)
                     
-                    # if value_task == task:
-                    if task == negative[predict_task]:
+                    if value_task == task:
                         count_retrieval += 1
-                        # print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
-                    # else:
-                        # print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
-                    
+
             result_retrieval.append(count_retrieval / len(test_data_text))
       
       
@@ -606,14 +633,13 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
     print(f"Length data train retrieval: {len(data_train)}")
     print("---" * 25 + 'Saving data train retrieval!' + "---" * 25 + '\n')
     random.shuffle(data_train)
-    save_jsonl(data=data_train, filename=f'/kaggle/working/train_step_{steps}.jsonl')
-    return data_train, f'/kaggle/working/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
+    save_jsonl(data=data_train, filename=f'./train_step_{steps}.jsonl')
+    return data_train, f'/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
 
 
 
 param = Param()
 args = param.args
-
 
 # Device
 torch.cuda.set_device(args.gpu)
@@ -642,10 +668,7 @@ if __name__ == '__main__':
 
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
-    path = '/kaggle/working/results'
-    if os.path.exists(path):
-        os.mkdir(path)
-
+    
     
     for rou in range(config.total_round):
         random.seed(config.seed + rou*100)
@@ -735,16 +758,16 @@ if __name__ == '__main__':
                 config.classifier_epochs, 
                 map_relid2tempid,
                 test_data_task,
-                seen_relations, 
+                seen_relations,
                 steps,
             )
 
-            torch.cuda.empty_cache()
+
 
             # Prepare data for training retrieval
-            retrieval_model = None
             
-            if config.trainable_retrieval: 
+            if config.trainable_retrieval:
+                    
                 data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
                     config, 
                     steps, 
@@ -758,66 +781,9 @@ if __name__ == '__main__':
             
             
                 if steps > 0:
-                    command = [
-                        "torchrun",
-                        "--nproc_per_node", "1",
-                        "-m", "FlagEmbedding.BGE_M3.run",
-                        "--output_dir", "./model_bge",
-                        "--model_name_or_path", "/kaggle/working/model_bge",
-                        "--train_data", "/kaggle/working/",
-                        "--learning_rate", "1e-5",
-                        "--fp16",
-                        "--num_train_epochs", "2",
-                        "--per_device_train_batch_size", "1",
-                        "--dataloader_drop_last",
-                        "--normlized",
-                        "--temperature", "0.02",
-                        "--query_max_len", "128",
-                        "--passage_max_len", "768 ",
-                        "--train_group_size", "1",
-                        "--negatives_cross_device",
-                        "--logging_steps", "20",
-                        "--save-total-limit", "1",
-                        "--save-steps", "20000",
-                        "--same_task_within_batch",
-                        "--unified_finetuning",
-                        "--use_self_distill"
-                    ]
-                    subprocess.run(command)
+                    train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
                 else:
-                    command = [
-                        "torchrun",
-                        "--nproc_per_node", "1",
-                        "-m", "FlagEmbedding.BGE_M3.run",
-                        "--output_dir", "./model_bge",
-                        "--model_name_or_path", "BAAI/bge-m3",
-                        "--train_data", "/kaggle/working/",
-                        "--learning_rate", "1e-5",
-                        "--fp16",
-                        "--num_train_epochs", "2",
-                        "--per_device_train_batch_size", "1",
-                        "--dataloader_drop_last",
-                        "--normlized",
-                        "--temperature", "0.02",
-                        "--query_max_len", "128",
-                        "--passage_max_len", "768",
-                        "--train_group_size", "1",
-                        "--negatives_cross_device",
-                        "--logging_steps", "10",
-                        "--same_task_within_batch",
-                        "--unified_finetuning",
-                        "--use_self_distill"
-                    ]
-                    subprocess.run(command)
-                
-            
-            # if config.trainable_retrieval:
-            #     if steps > 0:
-            #         train_retrieval(config=config, data_path=path_data, model_path='/kaggle/working/model_bge')
-            #     else:
-            #         train_retrieval(config=config, data_path=path_data, model_path=None)
-
-
+                    train_retrieval(config=config, data_path=path_data, model_path=None)
 
 
             # Get memories data
@@ -834,7 +800,7 @@ if __name__ == '__main__':
             data_for_retrieval.append({
                 'relations_task': current_relations,
                 'data': this_task_memory,
-                'task': steps,
+                'task': len(memorized_samples)
             })
             
             
@@ -867,7 +833,7 @@ if __name__ == '__main__':
             print(f"Length test current task: {len(test_data_task)}")
             print(f'Current test acc: {cur_acc}')
             print(f'Accuracy test all task: {test_cur}')
-            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel, retrieval_path=retrieval_model))
+            list_retrieval.append(evaluate_strict_all(config, steps, all_test_data, memorized_samples, list_map_relid2tempid, description_class, data_for_retrieval, id2rel))
             print('---'*23 + f'Finish task {steps}!' + '---'*23 + '\n')
             
             memorized_samples.append({
@@ -876,6 +842,6 @@ if __name__ == '__main__':
                 'task': len(memorized_samples)
             })
             
-            json.dump(list_retrieval, open(config.output_kaggle + f'/results/task_{steps}.json', 'w'), ensure_ascii=False)
+            json.dump(list_retrieval, open(f'./task_{steps}.json', 'w'), ensure_ascii=False)
             
         print(f"Finish result: {list_retrieval}")

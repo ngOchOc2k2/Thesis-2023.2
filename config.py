@@ -29,7 +29,7 @@ class Param:
         parser.add_argument("--save_checkpoint", default="./checkpoint/", type=str)
 
         # epochs
-        parser.add_argument("--classifier_epochs", default=5, type=int)
+        parser.add_argument("--classifier_epochs", default=1, type=int)
 
         # seed
         parser.add_argument("--seed", default=2021, type=int)
@@ -37,7 +37,8 @@ class Param:
 
         # dataset path
         parser.add_argument("--data_path", default="/kaggle/input/data-relation/datasets/standard/", type=str)
-        parser.add_argument("--no_relation", default="/no_relation.json", type=str)
+        parser.add_argument("--no_relation", default="/negative_fewrel.json", type=str)
+        parser.add_argument("--description_fewrel", default="/description_fewrel.json", type=str)
 
 
         # bert-base-uncased weights path
@@ -52,7 +53,7 @@ class Param:
         parser.add_argument("--hidden_size", default=768, type=int)
         parser.add_argument("--lr_encoder", default=0.0001, type=float)
         parser.add_argument("--lr_classifier", default=0.001, type=float)
-        parser.add_argument("--kl_temp", default=4, type=int)
+        parser.add_argument("--kl_temp", default=2, type=int)
 
         
         # lora params
@@ -64,14 +65,15 @@ class Param:
         parser.add_argument("--description_path", default="/kaggle/input/data-relation/datasets/standard.json", type=str)
         parser.add_argument("--type_similar", default="dense", type=str)
         parser.add_argument("--num_protos", default=10, type=int)
-        parser.add_argument("--top_k_negative", default=10, type=int)
-        parser.add_argument("--top_k_retrieval", default=10, type=int)
+        parser.add_argument("--top_k_negative", default=20, type=int)
+        parser.add_argument("--top_k_retrieval", default=5, type=int)
         parser.add_argument("--output_kaggle", default='/kaggle/working', type=str)
         parser.add_argument("--max_length_passage", default=768, type=int)
         parser.add_argument("--max_length_query", default=128, type=int)
         parser.add_argument("--colbert_vecs", default=False, type=bool)
         parser.add_argument("--dense_vecs", default=True, type=bool)
         parser.add_argument("--trainable_retrieval", default=True, type=bool)
+        parser.add_argument("--description_type", default='single', type=str)
         
         
         # description configs
