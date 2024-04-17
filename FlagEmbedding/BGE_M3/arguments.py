@@ -1,6 +1,7 @@
 import os
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional
+
 from transformers import TrainingArguments
 
 
@@ -26,12 +27,12 @@ class DataArguments:
         default=False, metadata={"help": "Use knowledge distillation when `pos_scores` and `neg_scores` are in features of training data"}
     )
     train_data: str = field(
-        default='/kaggle/working/', metadata={"help": "Path to train data",  "nargs": "+"}
+        default='/kaggle/input/data-relation/datasets/neg.jsonl', metadata={"help": "Path to train data"}
     )
     cache_path: Optional[str] = field(
         default=None, metadata={"help": "Where do you want to store the cached data"}
     )
-    train_group_size: int = field(default=2)
+    train_group_size: int = field(default=8)
 
     query_max_len: int = field(
         default=128,
@@ -74,10 +75,14 @@ class DataArguments:
             default=0, metadata={"help": "The threshold for dropping merged small dataset. If the number of examples in the merged small dataset is less than this threshold, it will be dropped."}
     )
 
+    # def __post_init__(self):
+    #     for train_dir in self.train_data:
+    #         if not os.path.exists(train_dir):
+    #             raise FileNotFoundError(f"cannot find file: {train_dir}, please set a true path")
+    
     def __post_init__(self):
-        for train_dir in [self.train_data]:
-            if not os.path.exists(train_dir):
-                raise FileNotFoundError(f"cannot find file: {train_dir}, please set a true path")
+        if not os.path.exists(self.train_data):
+            raise FileNotFoundError(f"cannot find file: {self.train_data}, please set a true path")
 
 @dataclass
 class RetrieverTrainingArguments(TrainingArguments):
@@ -97,8 +102,8 @@ class RetrieverTrainingArguments(TrainingArguments):
     normlized: bool = field(default=True)
     enable_sub_batch: bool = field(default=True, metadata={"help": "Freeze the parameters of position embeddings"})
     
-    unified_finetuning: bool = field(default=True, metadata={"help": "use unify fine-tuning"})
-    use_self_distill: bool = field(default=True, metadata={"help": "use self-distill when using unify fine-tuning"})
+    unified_finetuning: bool = field(default=False, metadata={"help": "use unify fine-tuning"})
+    use_self_distill: bool = field(default=False, metadata={"help": "use self-distill when using unify fine-tuning"})
     fix_encoder: bool = field(default=False, metadata={"help": "Freeze the parameters of encoder"})
     colbert_dim: int = field(default=-1, metadata={"help": "Dim of colbert linear"})
     self_distill_start_step: int = field(default=-1, metadata={"help": "Num of step when using self-distill"})

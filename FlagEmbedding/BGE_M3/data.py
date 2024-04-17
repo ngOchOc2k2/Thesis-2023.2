@@ -38,9 +38,6 @@ class SameDatasetTrainDataset(Dataset):
             'pos_scores': datasets.Sequence(datasets.Value('float')),
             'neg_scores': datasets.Sequence(datasets.Value('float')),
         })
-        
-        print(type(args.train_data))
-        print(len(args.train_data))
         assert isinstance(args.train_data, list) and len(args.train_data) >= 1
         
         if dist.get_rank() == 0:

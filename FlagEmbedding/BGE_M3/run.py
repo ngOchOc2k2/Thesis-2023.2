@@ -43,20 +43,17 @@ def train_retrieval(config, data_path, model_path=None):
 
     # Set seed
     set_seed(training_args.seed)
-
-
     data_args.train_data = config.output_kaggle + data_path
     
     if model_path != None:
         model_args.model_name_or_path = model_path
-
-
 
     tokenizer = AutoTokenizer.from_pretrained(
         model_args.tokenizer_name if model_args.tokenizer_name else model_args.model_name_or_path,
         cache_dir=model_args.cache_dir,
         use_fast=False,
     )
+
 
     model = BGEM3Model(model_name=model_args.model_name_or_path,
                        normlized=training_args.normlized,
@@ -68,7 +65,6 @@ def train_retrieval(config, data_path, model_path=None):
                        use_self_distill=training_args.use_self_distill,
                        colbert_dim=training_args.colbert_dim,
                        self_distill_start_step=training_args.self_distill_start_step)
-
 
 
     if training_args.fix_position_embedding:

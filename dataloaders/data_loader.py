@@ -28,7 +28,6 @@ class data_set(Dataset):
 
 
 def get_data_loader(config, data, shuffle=False, drop_last=False, batch_size=None):
-    
     dataset = data_set(data, config)
     if batch_size == None:
         batch_size = config.batch_size
