@@ -36,7 +36,7 @@ class Param:
         
 
         # dataset path
-        parser.add_argument("--data_path", default="/kaggle/input/data-relation/datasets/standard/", type=str)
+        parser.add_argument("--data_path", default="./datasets/standard/", type=str)
         parser.add_argument("--no_relation", default="/negative_fewrel.json", type=str)
         parser.add_argument("--description_fewrel", default="/description_fewrel.json", type=str)
 
@@ -62,12 +62,12 @@ class Param:
         
         # retrieval model configs
         parser.add_argument("--bge_model", default="BAAI/bge-m3", type=str)
-        parser.add_argument("--description_path", default="/kaggle/input/data-relation/datasets/standard.json", type=str)
+        parser.add_argument("--description_path", default="./datasets/standard.json", type=str)
         parser.add_argument("--type_similar", default="dense", type=str)
         parser.add_argument("--num_protos", default=10, type=int)
-        parser.add_argument("--top_k_negative", default=20, type=int)
-        parser.add_argument("--top_k_retrieval", default=5, type=int)
-        parser.add_argument("--output_kaggle", default='/kaggle/working', type=str)
+        parser.add_argument("--top_k_negative", default=30, type=int)
+        parser.add_argument("--top_k_retrieval", default=3, type=int)
+        parser.add_argument("--output_kaggle", default='', type=str)
         parser.add_argument("--max_length_passage", default=768, type=int)
         parser.add_argument("--max_length_query", default=128, type=int)
         parser.add_argument("--colbert_vecs", default=False, type=bool)
@@ -81,7 +81,7 @@ class Param:
 
         
         # output kaggle 
-        parser.add_argument("--checkpoint_kaggle", default='/kaggle/working/checkpoint', type=str)
+        parser.add_argument("--checkpoint_kaggle", default='./checkpoint', type=str)
         
 
         return parser

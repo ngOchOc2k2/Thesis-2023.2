@@ -31,7 +31,7 @@ class ModelArguments:
 @dataclass
 class DataArguments:
     train_data: str = field(
-        default='/kaggle/input/data-relation/datasets/neg.jsonl', metadata={"help": "Path to train data"}
+        default='./datasets/neg.jsonl', metadata={"help": "Path to train data"}
     )
     train_group_size: int = field(default=2)
 
@@ -68,12 +68,12 @@ class DataArguments:
 
 @dataclass
 class RetrieverTrainingArguments(TrainingArguments):
-    logging_steps: int = field(default=1000)
+    logging_steps: int = field(default=10)
     save_total_limit: int = field(default=1)
     save_steps: int = field(default=500000)
-    learning_rate: float = field(default=1e-5)
+    learning_rate: float = field(default=2e-5)
     num_train_epochs: int = field(default=1)
-    per_device_train_batch_size: int = field(default=1)
+    per_device_train_batch_size: int = field(default=2)
     dataloader_drop_last: bool = field(default=True)
     fp16: bool = field(default=True)
     output_dir: str = field(default='./model_teacher')
