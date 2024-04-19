@@ -734,7 +734,7 @@ if __name__ == '__main__':
 
     
     for rou in range(config.total_round):
-        random.seed(config.seed + rou*100 + 100)
+        random.seed(config.seed + rou*100 + 200)
         sampler = data_sampler(config, seed=config.seed + rou*100)
         id2rel = sampler.id2rel
         rel2id = sampler.rel2id
@@ -886,7 +886,7 @@ if __name__ == '__main__':
                         model_path='./model_bge', 
                         model_teacher='./model_teacher',
                         output_dir='./model_teacher',
-                        epochs=10
+                        epochs=15
                     )
                 else:
                     train_retrieval(config=config, data_path=path_total, model_path=None)

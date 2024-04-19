@@ -205,10 +205,10 @@ class DistilationModel(nn.Module):
         elif self.sentence_pooling_method == 'cls':
             return hidden_state[:, 0]
 
-    def encode(self, features):
+    def encode(self, features, model):
         if features is None:
             return None
-        psg_out = self.model(**features, return_dict=True)
+        psg_out = model(**features, return_dict=True)
         p_reps = self.sentence_embedding(psg_out.last_hidden_state, features['attention_mask'])
         if self.normlized:
             p_reps = torch.nn.functional.normalize(p_reps, dim=-1)
@@ -222,12 +222,12 @@ class DistilationModel(nn.Module):
 
 
     def forward(self, query: Dict[str, Tensor] = None, passage: Dict[str, Tensor] = None, teacher_score: Tensor = None):
-        q_reps = self.encode(query)
-        p_reps = self.encode(passage)
-        q_teach = self.encode(query)
-        p_teach = self.encode(passage)
+        q_reps = self.encode(query, self.model)
+        p_reps = self.encode(passage, self.model)
+        q_teach = self.encode(query, self.teacher)
+        p_teach = self.encode(passage, self.teacher)
         loss, loss_cl, loss_kd = 0.0, 0.0, 0.0
-        llambda = 0.5
+        llambda = 0.3
 
         if self.training:
             if self.negatives_cross_device and self.use_inbatch_neg:
@@ -247,6 +247,7 @@ class DistilationModel(nn.Module):
                 target = target * group_size
                 loss_cl = self.compute_loss(scores, target)
                 
+                
             else:
                 scores = self.compute_similarity(q_reps[:, None, :,], p_reps.view(q_reps.size(0), group_size, -1)).squeeze(1) / self.temperature # B G
 
@@ -255,12 +256,11 @@ class DistilationModel(nn.Module):
                 loss_cl = self.compute_loss(scores, target)
 
 
-            if self.distil_loss == True:
-                scores_teach = self.compute_similarity(q_teach, p_teach) / self.temperature # B B*G
-                scores_teach = scores_teach.view(q_teach.size(0), -1)
+            scores_teach = self.compute_similarity(q_teach, p_teach) / self.temperature # B B*G
+            scores_teach = scores_teach.view(q_teach.size(0), -1)
 
-                loss_kd = self.compute_distillation_loss(scores, scores_teach)
-                loss = llambda * loss_kd + (1 - llambda) * loss_cl
+            loss_kd = self.compute_distillation_loss(scores, scores_teach)
+            loss = llambda * loss_kd + (1 - llambda) * loss_cl
     
         else:
             scores = self.compute_similarity(q_reps, p_reps)
@@ -276,7 +276,7 @@ class DistilationModel(nn.Module):
     def compute_distillation_loss(self, student_scores, teacher_scores):
         student_scores_norm = F.normalize(student_scores, p=2, dim=-1)
         teacher_scores_norm = F.normalize(teacher_scores, p=2, dim=-1)
-        return 1 - F.cosine_similarity(student_scores_norm, teacher_scores_norm, dim=-1).mean()
+        return max(0, (1 - F.cosine_similarity(student_scores_norm, teacher_scores_norm, dim=-1).mean()))
 
 
     def compute_loss(self, scores, target):
