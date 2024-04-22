@@ -73,7 +73,7 @@ class Param:
         parser.add_argument("--colbert_vecs", default=False, type=bool)
         parser.add_argument("--dense_vecs", default=True, type=bool)
         parser.add_argument("--trainable_retrieval", default=True, type=bool)
-        parser.add_argument("--description_type", default='single', type=str)
+        parser.add_argument("--description_type", default='only', type=str)
         
         
         # description configs

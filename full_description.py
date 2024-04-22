@@ -346,7 +346,13 @@ def get_description(config, task, example, relation_type, description, data_type
             'relation3': description[relation_type[2]],
             'relation4': description[relation_type[3]],
         })  
-        elif config.description:
+        elif config.description_type == 'only':
+            return PROMPT_ONLY_EXAMPLE.format_map({
+            'entity1': extract_string_between_tokens(example['text'])[0],
+            'entity2': extract_string_between_tokens(example['text'])[1],
+            'example_relation': sample['relation'],
+            'example': remove_words_in_list(example['text'], REMOVE_TOKEN)
+        })       
         
               
     else:
@@ -1000,7 +1006,7 @@ if __name__ == '__main__':
             
             json.dump(list_retrieval, open(config.output_kaggle + f'./task_{steps}.json', 'w'), ensure_ascii=False)
         
+        
         if not os.path.exists(f'./results/task_{steps}'):
             os.makedirs(f'./results/task_{steps}')
         json.dump(list_retrieval, open(f'./results/task_{rou}/task_{steps}.json', 'w'), ensure_ascii=False)    
-        print(f"Finish result: {list_retrieval}")
