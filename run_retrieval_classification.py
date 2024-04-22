@@ -11,14 +11,15 @@ import collections
 import json
 from tqdm import tqdm
 import logging
-from config import Param
+from config import Param    
 from FlagEmbedding import BGEM3FlagModel
-from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval
+from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval, train_retrieval_distil
 import logging
 from collections import Counter
 import subprocess
 import os
-
+import re
+from copy import deepcopy
 
 
 logger = logging.getLogger(__name__)
@@ -30,36 +31,87 @@ color_number = '\033[93m'
 color_reset = '\033[0m'
 
 
-PROMPT_TASK_TACRED = """The task involves relation extraction for two entities within a given sentence. 
-There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
+PROMPT_TASK_TACRED = """There are four relations: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
-{relation}
-Example: {example}
+Describes the type of relationship: {relation}
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
 """
 
 
-PROMPT_TASK_FEWREL = """The task involves relation extraction for two entities within a given sentence. 
-There are eight classes: {re1}, {re2}, {re3}, {re4}, {re5}, {re6}, {re7}, {re8} each representing different types of relationships that can exist between the two entities. 
+PROMPT_TASK_TACRED_NO_EXAMPLE = """There are four relations: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
-{relation}
-Example: {example}
+Describes the type of relationship: {relation}
 """
 
 
-
-PROMPT_TASK_TACRED_ALL = """The task involves relation extraction for two entities within a given sentence. 
-There are four classes: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
+PROMPT_TASK_FEWREL = """There are eight relations: {re1}, {re2}, {re3}, {re4}, {re5}, {re6}, {re7}, {re8} each representing different types of relationships that can exist between the two entities. 
 The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
-{relation1}
+Describes the type of relationship: {relation}
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
+"""
+
+
+PROMPT_TASK_TACRED_ALL  = """There are eight relations: {re1}, {re2}, {re3}, {re4} each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+Describes the types of relationship: {relation1}
 {relation2}
 {relation3}
 {relation4}
-Example {example_relation}: {example}
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
 """
+
+
+PROMPT_TASK_TACRED_ALL_NO_EXAMPLE  = """There are eight relations: {re1}, {re2}, {re3}, {re4} each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+Describes the types of relationship: {relation1}
+{relation2}
+{relation3}
+{relation4}
+"""
+
 
 
 PROMPT_NO_RELATION = """In the extracted passage, tokens [E11], [E12], [E21], [E22] appear to mark the positions of entities. However, the words or phrases between them are not linked or refer to any relationship between these entities.
 Example: {example}"""
+
+
+PROMPT_NEGATIVE = """Describes the type of relationship: {relation}
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
+"""
+
+
+PROMPT_NEGATIVE_ALL  = """There are eight relations: place served by transport hub, mountain range relation, religion, participating team each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+Describes the types of relationship: place served by transport hub relation: territorial entity or entities served by this transport hub (airport, train station, etc.)
+mountain range relation: range or subrange to which the geographical item belongs
+religion: religion of a person, organization or religious building, or associated with this subject
+participating team: For an event like a cycle race or a football match you can use this property to list the teams and P710 to list the individuals (with 'member of sports team' (P54) as a qualifier for the individuals)
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
+"""
+
+
+# PROMPT_NEGATIVE = """There are four relations: place served by transport hub, located on terrain feature, musical conductor, participating team, each representing different types of relationships that can exist between the two entities. 
+# The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+# Describes the type of relationship: {relation}
+# In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
+# """
+
+
+REMOVE_TOKEN = ['[E11]', '[E12]', '[E21]', '[E22]', '-rrb-', '-lrb-']
+
+
+PROMPT = """Task: {task}"""
+
+def extract_string_between_tokens(sentence):
+    pattern = re.compile(r"\[E11\](.*?)\[E12\].*\[E21\](.*?)\[E22\]")
+    match = pattern.search(sentence)
+
+    if match:
+        string_e11_e12 = match.group(1).strip()
+        string_e21_e22 = match.group(2).strip()
+        return string_e11_e12, string_e21_e22
+    else:
+        return None, None
 
 
 def set_seed_classifier(config, seed):
@@ -86,8 +138,12 @@ class CELoss(nn.Module):
 
 
 
-def save_jsonl(filename, data):
-    with open(filename, 'w') as f:
+
+def save_jsonl(filename, data, name=None):
+    if not os.path.exists(filename):
+        os.makedirs(filename)
+        
+    with open(filename + name, 'w') as f:
         for item in data:
             json.dump(item, f)
             f.write('\n')
@@ -196,42 +252,130 @@ def train_simple_model(config, encoder, classifier, training_data, epochs, map_r
 
 
 def most_frequent(arr):
-    counter = Counter(arr)
-    most_common = counter.most_common(1) 
-    return most_common[0][0]
-
+    return max(arr, key=arr.count)
 
 def get_values_from_indices(array_n, array_m):
-    return [array_n[index] for index in array_m if index < len(array_n)]
-
+    n = len(array_n)
+    return [array_n[index] for index in array_m if 0 <= index < n]
 
 def top_k_indices(arr, k):
-    indexed_arr = list(enumerate(arr))
-    sorted_arr = sorted(indexed_arr, key=lambda x: x[1], reverse=True)
-    top_indices = [index for index, _ in sorted_arr[:k]]
-    return top_indices
-
+    return sorted(range(len(arr)), key=lambda i: arr[i], reverse=True)[:k]
 
 
 def most_frequent_value(array):
-    frequency_dict = {}
     max_frequency = 0
     most_frequent_value = None
     index_of_most_frequent_value = None
-    
+
     for index, value in enumerate(array):
-        if value in frequency_dict:
-            frequency_dict[value] += 1
-        else:
-            frequency_dict[value] = 1
-        
-        if frequency_dict[value] > max_frequency:
-            max_frequency = frequency_dict[value]
+        frequency = sum(1 for v in array if v == value)
+        if frequency > max_frequency:
+            max_frequency = frequency
             most_frequent_value = value
             index_of_most_frequent_value = index
 
     return most_frequent_value, index_of_most_frequent_value
 
+
+def remove_words_in_list(sentence, word_list):
+    sentence = re.sub(r'[^\w\s]', '', sentence)
+    words = sentence.split()
+    processed_words = [word for word in words if word not in word_list]
+    processed_sentence = ' '.join(processed_words)
+    return processed_sentence
+
+
+
+PROMPT_TACRED_GPT = """
+In this task, you will encounter four distinct types of relations: {re1}, {re2}, {re3}, and {re4}. Each of these relations represents a different aspect of the connection that can exist between two entities. Your goal is to accurately classify the relationship between the entities into one of these predefined classes. This classification is based on the contextual information provided by the sentence.
+The nature of the relationship is defined by the variable: {relation}. This variable captures the essence of the connection between the entities and serves as a guide for your classification process.
+To help you understand and perform the classification task effectively, here are five examples illustrating different relationships:
+In the following sentence: "{example1}," the relationship between {entity1_1} and {entity1_2} is {example_relation1}. This example demonstrates how {re1} is manifested in the given context.
+Another example: "{example2}," showcases the relationship between {entity2_1} and {entity2_2}, classified as {example_relation2}. This instance highlights the nuances of {re1} in the provided context.
+Consider the sentence: "{example3}," where the relationship between {entity3_1} and {entity3_2} is identified as {example_relation3}. This example sheds light on the characteristics of {re1} as observed in the sentence.
+Furthermore, in the context of: "{example4}," the relationship between {entity4_1} and {entity4_2} is categorized as {example_relation4}. This case exemplifies the intricacies associated with {re1}.
+Lastly, let's examine the sentence: "{example5}," where the relationship between {entity5_1} and {entity5_2} is labeled as {example_relation5}. This example offers insights into yet another instance of {re1}, reinforcing your understanding of the classification criteria.
+"""
+
+
+
+def get_description(config, task, example, relation_type, description, data_type, id2rel):
+    if data_type == 'TACRED':
+        if config.description_type == 'single':
+            return PROMPT_TASK_TACRED.format_map({
+            're1': relation_type[0],
+            're2': relation_type[1],
+            're3': relation_type[2],
+            're4': relation_type[3],
+            'relation': description[id2rel[example[0]['relation']]],
+            'entity1': extract_string_between_tokens(example[0]['text'])[0],
+            'entity2': extract_string_between_tokens(example[0]['text'])[1],
+            'example_relation': sample['relation'],
+            'example': remove_words_in_list(example[0]['text'], REMOVE_TOKEN)
+        })
+        elif config.description_type == 'all':
+            return PROMPT_TASK_TACRED_ALL_NO_EXAMPLE.format_map({
+            're1': relation_type[0],
+            're2': relation_type[1],
+            're3': relation_type[2],
+            're4': relation_type[3],
+            'relation1': description[relation_type[0]],
+            'relation2': description[relation_type[1]],
+            'relation3': description[relation_type[2]],
+            'relation4': description[relation_type[3]],
+        })  
+        elif config.description_type == 'gpt':
+            return PROMPT_TACRED_GPT.format_map({
+            're1': relation_type[0],
+            're2': relation_type[1],
+            're3': relation_type[2],
+            're4': relation_type[3],
+            'relation': description[id2rel[example[0]['relation']]],
+            
+            'entity1_1': extract_string_between_tokens(example[0]['text'])[0],
+            'entity1_2': extract_string_between_tokens(example[0]['text'])[1],
+            'example_relation_1': sample['relation'],
+            'example_1': remove_words_in_list(example[0]['text'], REMOVE_TOKEN),
+            
+            'entity2_1': extract_string_between_tokens(example[1]['text'])[0],
+            'entity2_2': extract_string_between_tokens(example[1]['text'])[1],
+            'example_relation_2': sample['relation'],
+            'example_2': remove_words_in_list(example[1]['text'], REMOVE_TOKEN),
+            
+            'entity3_1': extract_string_between_tokens(example[2]['text'])[0],
+            'entity3_2': extract_string_between_tokens(example[2]['text'])[1],
+            'example_relation_3': sample['relation'],
+            'example_3': remove_words_in_list(example[2]['text'], REMOVE_TOKEN),
+            
+            'entity4_1': extract_string_between_tokens(example[3]['text'])[0],
+            'entity4_2': extract_string_between_tokens(example[3]['text'])[1],
+            'example_relation_4': sample['relation'],
+            'example_4': remove_words_in_list(example[3]['text'], REMOVE_TOKEN),
+            
+            'entity5_1': extract_string_between_tokens(example[4]['text'])[0],
+            'entity5_2': extract_string_between_tokens(example[4]['text'])[1],
+            'example_relation_5': sample['relation'],
+            'example_5': remove_words_in_list(example[4]['text'], REMOVE_TOKEN)
+        })  
+              
+    else:
+        return PROMPT_TASK_FEWREL.format_map({
+        're1': relation_type[0],
+        're2': relation_type[1],
+        're3': relation_type[2],
+        're4': relation_type[3],
+        're5': relation_type[4],
+        're6': relation_type[5],
+        're7': relation_type[6],
+        're8': relation_type[7],
+        'entity1': extract_string_between_tokens(example[0]['text'])[0],
+        'entity2': extract_string_between_tokens(example[0]['text'])[1],
+        'relation': description[id2rel[example[0]['relation']]],
+        'example_relation': sample['relation'],
+        'example': remove_words_in_list(example[0]['text'], REMOVE_TOKEN)
+    })
+        
+        
 
 
 def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_relid2tempid, description, data_for_retrieval, id2rel, retrieval_path=None):    
@@ -288,30 +432,7 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
         for task in data_for_retrieval:
             for keys, values in enumerate(task['data']):
                 for sample in task['data'][values]:
-                    if config.task_name == 'TACRED':
-                        memories_data_text.append(PROMPT_TASK_TACRED.format_map({
-                                're1': task['relations_task'][-4],
-                                're2': task['relations_task'][-3],
-                                're3': task['relations_task'][-2],
-                                're4': task['relations_task'][-1],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                            }))
-                        
-                    else:
-                        memories_data_text.append(PROMPT_TASK_FEWREL.format_map({
-                                're1': task['relations_task'][-8],
-                                're2': task['relations_task'][-7],
-                                're3': task['relations_task'][-6],
-                                're4': task['relations_task'][-5],
-                                're5': task['relations_task'][-4],
-                                're6': task['relations_task'][-3],
-                                're7': task['relations_task'][-2],
-                                're8': task['relations_task'][-1],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                            }))
-                        
+                    memories_data_text.append(get_description(config, steps, sample, task['relations_task'], description, config.task_name, id2rel))
                     memories_data_task.append(task['task'])
                     memories_data_relation.append(sample['relation'])
 
@@ -331,31 +452,21 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
 
             
             if config.type_similar == 'dense':
-                
                 # Embedding test data
                 embedding_test_data = bge_model.encode(test_data_text, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
                 result = embedding_test_data['dense_vecs'] @ embedding_memories_data['dense_vecs'].T
                 result = result.tolist()
                     
                 for idx_query, query_text in enumerate(result):
-                    
-                    # Get top k indices have the most similar score
                     negative_indices = top_k_indices(result[idx_query], config.top_k_retrieval)
-                    
-                    # Get values from top k indices above
                     negative = get_values_from_indices(memories_data_task, negative_indices)
-                    
-                    # Get task value have the most frequent
                     value_task, predict_task = most_frequent_value(negative)
                     
                     # if value_task == task:
-                    if task == negative[predict_task]:
+                    if task == value_task:
                         count_retrieval += 1
-                        print(f"Count: {count_retrieval}/{len(test_data_text)} = {count_retrieval / len(test_data_text)}")
                         count_true_retrieval_total += 1
                         data_for_classifier_task[task].append(test_data['data'][idx_query])
-                    else:
-                        print(f"Task: {task}, Wrong predict task: {negative[predict_task]}")
                     
             result_retrieval.append(count_retrieval / len(test_data_text))
       
@@ -434,180 +545,242 @@ def evaluate_strict_model(config, encoder, classifier, test_data, seen_relations
 
 
 
-def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, description, current_data, memory_data, id2rel):
-    retrieval_model = BGEM3FlagModel(bge_m3, use_fp16=True, device='cuda')
+def get_des_fewrel(example, description):
+    for des in description:
+        if des['relation'] == example['relation']:
+            return des['text']
+    return None
     
+    
+    
+def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, description, current_data, data_memory, data_for_retrieval, id2rel):
+    if steps == 0:
+        retrieval_model = BGEM3FlagModel(bge_m3, use_fp16=True, device='cuda')
+    else:
+        retrieval_model = BGEM3FlagModel('./model_teacher', use_fp16=True, device='cuda')
+        
+        
     print("---" * 23 + 'Preparing data for training retrieval model!' + "---" * 23 + '\n')
-    data_train = []
-    
-    
+    data_train, data_last_train = [], []
+
     # If first task
     if steps == 0:
-        no_relation = json.load(open(config.data_path + config.no_relation, 'r'))
-        no_relation_text = [PROMPT_NO_RELATION.format_map({'example': " ".join(item["tokens"])}) for item in no_relation]
+        id2rel_fewrel = {
+            'P931': 'place served by transport hub',
+            'P4552': 'mountain range',
+            'P1923': 'participating team',
+            'P140': 'religion'
+        }
+        negative_relation = json.load(open(config.data_path + config.no_relation, 'r'))
+        description_fewrel = json.load(open(config.data_path + config.description_fewrel, 'r'))
+        no_relation_text = [PROMPT_NEGATIVE_ALL.format_map({
+            # 'relation': get_des_fewrel(item, description_fewrel),
+            'entity1': extract_string_between_tokens(' '.join(item['tokens']))[0],
+            'entity2': extract_string_between_tokens(' '.join(item['tokens']))[1],
+            'example_relation': id2rel_fewrel[item['relation']],
+            'example': remove_words_in_list(" ".join(item["tokens"]), REMOVE_TOKEN),
+        }) for item in negative_relation]
         
         query = [item['text'] for item in current_data]
         task_relation = [item['relation'] for item in current_data]
         
-        
         # Embedding query and no relation data
         embedding_query = retrieval_model.encode(query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
         embedding_neg = retrieval_model.encode(no_relation_text, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
-
+        
         if config.type_similar == 'dense':
             result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
             result = result.tolist()
             
-            
-            for idx_query, query_text in enumerate(query):
+            for idx_query, (query_text, rel_id) in enumerate(zip(query, task_relation)):
                 negative_indices = top_k_indices(result[idx_query], config.top_k_negative)
                 negative = get_values_from_indices(no_relation_text, negative_indices)
                 random.shuffle(current_data)
                 
-                for sample in current_data:
-                    if sample['text'] != query_text and sample['relation'] == task_relation[idx_query]:
-                        if config.task_name == 'TACRED':
-                            positive = PROMPT_TASK_TACRED.format_map({
-                                're1': current_relation[0],
-                                're2': current_relation[1],
-                                're3': current_relation[2],
-                                're4': current_relation[3],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                            })
-                        else:
-                            positive = PROMPT_TASK_FEWREL.format_map({
-                                're1': current_relation[0],
-                                're2': current_relation[1],
-                                're3': current_relation[2],
-                                're4': current_relation[3],
-                                're5': current_relation[4],
-                                're6': current_relation[5],
-                                're7': current_relation[6],
-                                're8': current_relation[7],
-                                'relation': description[id2rel[sample['relation']]],
-                                'example': sample['text']
-                            })
-                            
-                        data_train.append({
-                            'query': query_text,
-                            'pos': [positive],
-                            'neg': negative,
-                        })
-                        break
-    
-    
+                # Filter out positive examples by relation
+                filtered_positive_examples = filter(lambda sample: sample['relation'] == rel_id, current_data)
+                positive_example = next(filtered_positive_examples, None)
+                
+                if positive_example:
+                    positive = get_description(
+                        config=config,
+                        task=steps,
+                        example=positive_example,
+                        relation_type=current_relation,
+                        description=description,
+                        data_type=config.task_name,
+                        id2rel=id2rel,
+                        
+                    )
+                    data_train.append({
+                        'query': query_text,
+                        'pos': [positive],
+                        'neg': negative,
+                    })
+        
     # If task > 0
     else:
+        memory_data = deepcopy(data_memory)
         current_data_for_relation = {}
         for relation in current_relation:
             current_data_for_relation[relation] = []
-            
+
+        # Group samples by relation
         for sample in current_data:
             current_data_for_relation[id2rel[sample['relation']]].append(sample)
-        
+
         memory_data.append({
             'relations_task': current_relations,
             'data': current_data_for_relation,
             'task': len(memory_data)
         })
-        
+
         for task in range(len(memory_data)):
-            current_query, task_relation, original_this_task, neg_query = [], [], [], []
+            if task == len(memory_data) - 1:
+                current_query, task_relation, original_this_task, neg_query, neg_ori = [], [], [], [], []
+                this_list_relation = memory_data[task]['relations_task']
+
+                # Concatenate queries and task relations
+                for re_task, samples in memory_data[task]['data'].items():
+                    current_query += [item['text'] for item in samples]
+                    task_relation += [item['relation'] for item in samples]
+                    original_this_task += samples
+
+                # Construct negative queries
+                for task_neg in range(len(memory_data)):
+                    if task != task_neg:
+                        for re_task, samples in memory_data[task_neg]['data'].items():
+                            neg_query += [get_description(config, steps, sample, memory_data[task_neg]['relations_task'], description, config.task_name, id2rel) for sample in samples]
+                            neg_ori += [sample['text'] for sample in samples]                
+
+                # Embedding query and negative
+                embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+                embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+                embedding_ori = retrieval_model.encode(neg_ori, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+
+                if config.type_similar == 'dense':
+                    result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
+                    result = result.tolist()
+                    
+                    result_ori = embedding_query['dense_vecs'] @ embedding_ori['dense_vecs'].T
+                    result_ori = result_ori.tolist()
+
+                    for idx_query, (query_text, rel_id) in enumerate(zip(current_query, task_relation)):
+                        negative_indices = top_k_indices(result[idx_query], config.top_k_negative)
+                        negative = get_values_from_indices(neg_query, negative_indices)
+                        
+                        negative_indices_ori = top_k_indices(result_ori[idx_query], config.top_k_negative)
+                        negative_ori = get_values_from_indices(neg_ori, negative_indices_ori)
+
+                        random.shuffle(original_this_task)
+
+                        # Find positive examples
+                        for sample in original_this_task:
+                            if sample['text'] != query_text and sample['relation'] == rel_id:
+                                positive = get_description(
+                                    config=config,
+                                    task=steps,
+                                    example=sample,
+                                    relation_type=this_list_relation,
+                                    description=description,
+                                    data_type=config.task_name,
+                                    id2rel=id2rel,
+                                )
+
+                                data_last_train.append({
+                                    'query': query_text,
+                                    'pos': [positive],
+                                    'neg': negative + negative_ori,
+                                })
+
+                                data_last_train.append({
+                                    'query': positive,
+                                    'pos': [query_text],
+                                    'neg': negative + negative_ori,
+                                })
+                            
+                                break
+
+
+
+        memory_data = deepcopy(data_for_retrieval)
+
+        for task in range(len(memory_data)):
+            current_query, task_relation, original_this_task, neg_query, neg_ori = [], [], [], [], []
             this_list_relation = memory_data[task]['relations_task']
-            for relation_temp in this_list_relation:
-                try:
-                    original_this_task += memory_data[task]['data'][relation_temp]
-                except:
-                    print("Error relation: {relation_temp}")
-                    continue
-                
-            for keys, re_task in enumerate(memory_data[task]['data']):
-                current_query += [item['text'] for item in memory_data[task]['data'][re_task]]
-                task_relation += [item['relation'] for item in memory_data[task]['data'][re_task]]
-    
+
+            # Concatenate queries and task relations
+            for re_task, samples in memory_data[task]['data'].items():
+                current_query += [item['text'] for item in samples]
+                task_relation += [item['relation'] for item in samples]
+                original_this_task += samples
+
+            # Construct negative queries
             for task_neg in range(len(memory_data)):
                 if task != task_neg:
-                    neg_relation = memory_data[task_neg]['relations_task']
-                    for keys, re_task in enumerate(memory_data[task_neg]['data']):
-                        if config.task_name == 'TACRED':
-                            neg_query += [PROMPT_TASK_TACRED.format_map({
-                                    're1': neg_relation[0],
-                                    're2': neg_relation[1],
-                                    're3': neg_relation[2],
-                                    're4': neg_relation[3],
-                                    'relation': description[id2rel[sample['relation']]],
-                                    'example': sample['text']
-                            }) for sample in memory_data[task_neg]['data'][re_task]]
-                        else:
-                            neg_query += [PROMPT_TASK_FEWREL.format_map({
-                                    're1': neg_relation[0],
-                                    're2': neg_relation[1],
-                                    're3': neg_relation[2],
-                                    're4': neg_relation[3],
-                                    're5': neg_relation[4],
-                                    're6': neg_relation[5],
-                                    're7': neg_relation[6],
-                                    're8': neg_relation[7],
-                                    'relation': description[id2rel[sample['relation']]],
-                                    'example': sample['text']
-                            }) for sample in memory_data[task_neg]['data'][re_task]]   
-
-
-
-            # Embedding query and negative 
+                    for re_task, samples in memory_data[task_neg]['data'].items():
+                        neg_query += [get_description(config, steps, sample, memory_data[task_neg]['relations_task'], description, config.task_name, id2rel) for sample in samples]
+                        neg_ori += [sample['text'] for sample in samples]
+                        
+            # Embedding query and negative
             embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
-            embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)  
+            embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+            embedding_ori = retrieval_model.encode(neg_ori, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+
 
             if config.type_similar == 'dense':
                 result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
                 result = result.tolist()
-                
-                for idx_query, query_text in enumerate(current_query):
+
+                result_ori = embedding_query['dense_vecs'] @ embedding_ori['dense_vecs'].T
+                result_ori = result_ori.tolist()
+
+                for idx_query, (query_text, rel_id) in enumerate(zip(current_query, task_relation)):
                     negative_indices = top_k_indices(result[idx_query], config.top_k_negative)
                     negative = get_values_from_indices(neg_query, negative_indices)
-                    
+
+                    negative_indices_ori = top_k_indices(result_ori[idx_query], config.top_k_negative)
+                    negative_ori = get_values_from_indices(neg_ori, negative_indices_ori)
+
                     random.shuffle(original_this_task)
-                    
+
+                    # Find positive examples
                     for sample in original_this_task:
-                        if sample['text'] != query_text and sample['relation'] == task_relation[idx_query]:
-                            if config.task_name == 'TACRED':
-                                positive = PROMPT_TASK_TACRED.format_map({
-                                    're1': this_list_relation[0],
-                                    're2': this_list_relation[1],
-                                    're3': this_list_relation[2],
-                                    're4': this_list_relation[3],
-                                    'relation': description[id2rel[sample['relation']]],
-                                    'example': sample['text']
-                                })
-                            else:
-                                positive = PROMPT_TASK_FEWREL.format_map({
-                                    're1': this_list_relation[0],
-                                    're2': this_list_relation[1],
-                                    're3': this_list_relation[2],
-                                    're4': this_list_relation[3],
-                                    're5': this_list_relation[4],
-                                    're6': this_list_relation[5],
-                                    're7': this_list_relation[6],
-                                    're8': this_list_relation[7],
-                                    'relation': description[id2rel[sample['relation']]],
-                                    'example': sample['text']
-                                })
-                                
-                                
+                        if sample['text'] != query_text and sample['relation'] == rel_id:
+                            positive = get_description(
+                                config=config,
+                                task=steps,
+                                example=sample,
+                                relation_type=this_list_relation,
+                                description=description,
+                                data_type=config.task_name,
+                                id2rel=id2rel,
+                            )
+                            
                             data_train.append({
                                 'query': query_text,
                                 'pos': [positive],
-                                'neg': negative,
+                                'neg': negative + negative_ori,
                             })
-                            
+
+                            data_train.append({
+                                'query': positive,
+                                'pos': [query_text],
+                                'neg': negative + negative_ori,
+                            })
+
+
                             break
 
-    print(f"Length data train retrieval: {len(data_train)}")
+
+
+    print(f"total task train: {len(data_train)}, last task train: {len(data_last_train)}")
     print("---" * 25 + 'Saving data train retrieval!' + "---" * 25 + '\n')
     random.shuffle(data_train)
-    save_jsonl(data=data_train, filename=f'/kaggle/working/train_step_{steps}.jsonl')
-    return data_train, f'/kaggle/working/train_step_{steps}.jsonl', '/kaggle/working/model_bge'
+    save_jsonl(data=data_train, filename=f'./datasets/train_data/train_step_{steps}', name=f'/train_step_{steps}.jsonl')
+    save_jsonl(data=data_last_train, filename=f'./datasets/train_data/train_step_{steps}', name=f'/train_last_{steps}.jsonl')
+    return data_train, data_last_train, f'datasets/train_data/train_step_{steps}/train_step_{steps}.jsonl', f'datasets/train_data/train_step_{steps}/train_last_{steps}.jsonl', './model_teacher'
+
 
 
 
@@ -627,14 +800,14 @@ if args.dataname == 'FewRel':
     args.num_class = 80
     args.max_length_passage = 1024
     args.batch_size = 32
-    args.description_path = "/kaggle/input/data-relation/datasets/standard/description_fewrel.json" 
+    args.description_path = "./datasets/standard/description_fewrel.json" 
     
 else:
     args.rel_per_task = 4
     args.num_class = 40
     args.batch_size = 16
     args.max_length_passage = 768
-    args.description_path = "/kaggle/input/data-relation/datasets/standard/description_tacred.json" 
+    args.description_path = "./datasets/standard/description_tacred.json" 
 
     
 if __name__ == '__main__':
@@ -642,9 +815,7 @@ if __name__ == '__main__':
 
     config.device = torch.device(config.device)
     config.n_gpu = torch.cuda.device_count()
-    path = '/kaggle/working/results'
-    if os.path.exists(path):
-        os.mkdir(path)
+
 
     
     for rou in range(config.total_round):
@@ -744,77 +915,10 @@ if __name__ == '__main__':
             # Prepare data for training retrieval
             retrieval_model = None
             
-            if config.trainable_retrieval: 
-                data_retrieval, path_data, retrieval_model = prepare_data_for_retrieval(
-                    config, 
-                    steps, 
-                    bge_m3_path, 
-                    current_relations, 
-                    description_class, 
-                    train_data_for_initial, 
-                    memorized_samples, 
-                    id2rel
-                )
             
-            
-                if steps > 0:
-                    # Define the command with arguments
-                    command = [
-                        "torchrun",
-                        "--nproc_per_node", "2",
-                        "-m", "FlagEmbedding.BGE_M3.run",
-                        "--output_dir", "./model_bge",
-                        "--model_name_or_path", "/kaggle/working/model_bge",
-                        "--train_data", "/kaggle/working/",
-                        "--learning_rate", "1e-5",
-                        "--fp16",
-                        "--num_train_epochs", "2",
-                        "--per_device_train_batch_size", "1",
-                        "--dataloader_drop_last",
-                        "--normlized",
-                        "--temperature", "0.02",
-                        "--query_max_len", "128",
-                        "--passage_max_len", "768 ",
-                        "--train_group_size", "2",
-                        "--negatives_cross_device",
-                        "--logging_steps", "20",
-                        "--same_task_within_batch",
-                        "--unified_finetuning",
-                        "--use_self_distill"
-                    ]
-                    subprocess.run(command)
-                else:
-                    # Define the command with arguments
-                    command = [
-                        "torchrun",
-                        "--nproc_per_node", "2",
-                        "-m", "FlagEmbedding.BGE_M3.run",
-                        "--output_dir", "./model_bge",
-                        "--model_name_or_path", "BAAI/bge-m3",
-                        "--train_data", "/kaggle/working/",
-                        "--learning_rate", "1e-5",
-                        "--fp16",
-                        "--num_train_epochs", "2",
-                        "--per_device_train_batch_size", "1",
-                        "--dataloader_drop_last",
-                        "--normlized",
-                        "--temperature", "0.02",
-                        "--query_max_len", "128",
-                        "--passage_max_len", "768",
-                        "--train_group_size", "2",
-                        "--negatives_cross_device",
-                        "--logging_steps", "10",
-                        "--same_task_within_batch",
-                        "--unified_finetuning",
-                        "--use_self_distill"
-                    ]
-                    subprocess.run(command)
-
-
             # Get memories data
             this_task_memory = {}
-            
-            
+              
             
             print('---'*23 + 'Get memories data!' + '---'*23 + '\n')
             for relation in current_relations:
@@ -836,6 +940,42 @@ if __name__ == '__main__':
                 'seen_relation': history_relations,
                 'current_relation': current_relations,
             })
+            
+            
+            if config.trainable_retrieval: 
+                data_total, data_last, path_total, path_last, retrieval_model = prepare_data_for_retrieval(
+                    config, 
+                    steps, 
+                    bge_m3_path, 
+                    current_relations, 
+                    description_class, 
+                    train_data_for_initial, 
+                    memorized_samples, 
+                    data_for_retrieval,
+                    id2rel
+                )
+            
+
+            if config.trainable_retrieval:
+                if steps > 0:
+                    train_retrieval(
+                        config=config, 
+                        data_path=path_last, 
+                        model_path='./model_teacher',
+                        output_dir='./model_bge',
+                    )
+                    
+                    train_retrieval_distil(
+                        config=config, 
+                        data_path=path_total, 
+                        model_path='./model_bge', 
+                        model_teacher='./model_teacher',
+                        output_dir='./model_teacher',
+                        epochs=15
+                    )
+                else:
+                    train_retrieval(config=config, data_path=path_total, model_path=None)
+
             
             
             temp_rel2id = [rel2id[x] for x in history_relations]
@@ -867,6 +1007,9 @@ if __name__ == '__main__':
                 'task': len(memorized_samples)
             })
             
-            json.dump(list_retrieval, open(f'./results/task_{steps}.json', 'w'), ensure_ascii=False)
-            
+            json.dump(list_retrieval, open(config.output_kaggle + f'./task_{steps}.json', 'w'), ensure_ascii=False)
+        
+        if not os.path.exists(f'./results/task_{steps}'):
+            os.makedirs(f'./results/task_{steps}')
+        json.dump(list_retrieval, open(f'./results/task_{rou}/task_{steps}.json', 'w'), ensure_ascii=False)    
         print(f"Finish result: {list_retrieval}")

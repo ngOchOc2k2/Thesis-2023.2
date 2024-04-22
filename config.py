@@ -29,7 +29,7 @@ class Param:
         parser.add_argument("--save_checkpoint", default="./checkpoint/", type=str)
 
         # epochs
-        parser.add_argument("--classifier_epochs", default=5, type=int)
+        parser.add_argument("--classifier_epochs", default=1, type=int)
 
         # seed
         parser.add_argument("--seed", default=2021, type=int)
@@ -66,9 +66,9 @@ class Param:
         parser.add_argument("--type_similar", default="dense", type=str)
         parser.add_argument("--num_protos", default=10, type=int)
         parser.add_argument("--top_k_negative", default=30, type=int)
-        parser.add_argument("--top_k_retrieval", default=10, type=int)
+        parser.add_argument("--top_k_retrieval", default=3, type=int)
         parser.add_argument("--output_kaggle", default='', type=str)
-        parser.add_argument("--max_length_passage", default=1024, type=int)
+        parser.add_argument("--max_length_passage", default=1536, type=int)
         parser.add_argument("--max_length_query", default=256, type=int)
         parser.add_argument("--colbert_vecs", default=False, type=bool)
         parser.add_argument("--dense_vecs", default=True, type=bool)
