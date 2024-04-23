@@ -74,7 +74,7 @@ class Param:
         parser.add_argument("--dense_vecs", default=True, type=bool)
         parser.add_argument("--trainable_retrieval", default=True, type=bool)
         parser.add_argument("--description_type", default='only', type=str)
-        
+        parser.add_argument("--batch_size_retrieval", default=2, type=int)
         
         # description configs
         parser.add_argument("--use_example", default=True, type=bool)        

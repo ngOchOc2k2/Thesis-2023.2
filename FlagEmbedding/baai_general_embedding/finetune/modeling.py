@@ -135,8 +135,8 @@ class DistilationModel(nn.Module):
                 
                 target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
                 target = target * group_size
-                # loss_cl = self.compute_loss(scores, target)
-                loss_cl = self.compute_infonce_loss(q_reps, p_reps)
+                loss_cl = self.compute_loss(scores, target)
+                # loss_cl = self.compute_infonce_loss(q_reps, p_reps)
 
                 
             else:
@@ -144,8 +144,8 @@ class DistilationModel(nn.Module):
 
                 scores = scores.view(q_reps.size(0), -1)
                 target = torch.zeros(scores.size(0), device=scores.device, dtype=torch.long)
-                # loss_cl = self.compute_loss(scores, target)
-                loss_cl = self.compute_infonce_loss(q_reps, p_reps)
+                loss_cl = self.compute_loss(scores, target)
+                # loss_cl = self.compute_infonce_loss(q_reps, p_reps)
 
 
             scores_teach = self.compute_similarity(q_teach, p_teach) / self.temperature # B B*G
@@ -303,15 +303,15 @@ class BiEncoderModel(nn.Module):
                 
                 target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
                 target = target * group_size
-                # loss = self.compute_loss(scores, target)
-                loss = self.compute_infonce_loss(q_reps, p_reps)
+                loss = self.compute_loss(scores, target)
+                # loss = self.compute_infonce_loss(q_reps, p_reps)
 
             else:
                 scores = self.compute_similarity(q_reps[:, None, :,], p_reps.view(q_reps.size(0), group_size, -1)).squeeze(1) / self.temperature # B G
                 scores = scores.view(q_reps.size(0), -1)
                 target = torch.zeros(scores.size(0), device=scores.device, dtype=torch.long)
-                # loss = self.compute_loss(scores, target)  
-                loss = self.compute_infonce_loss(q_reps, p_reps)
+                loss = self.compute_loss(scores, target)  
+                # loss = self.compute_infonce_loss(q_reps, p_reps)
 
         else:
             scores = self.compute_similarity(q_reps, p_reps)

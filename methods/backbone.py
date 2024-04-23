@@ -209,7 +209,7 @@ class Classifier_Layer(base_model):
             nn.Linear(config.hidden_size, self.num_class),
         )
         
-    def forward(self, input):
-        return self.head(input)
+    def forward(self, inputs):
+        return self.head(inputs)
 
 

@@ -15,14 +15,6 @@ class data_sampler(object):
         self.set_path(args)
         self.args = args
 
-        # data path
-        file_name = "{}.pkl".format("-".join([str(x) for x in [args.dataname, args.seed]]))
-        mid_dir = ""
-        for temp_p in ["datasets", "_process_path"]:
-            mid_dir = os.path.join(mid_dir, temp_p)
-            if not os.path.exists(mid_dir):
-                os.mkdir(mid_dir)
-        self.save_data_path = os.path.join(mid_dir, file_name)
 
         # import tokenizer
         self.tokenizer = get_tokenizer(args)
