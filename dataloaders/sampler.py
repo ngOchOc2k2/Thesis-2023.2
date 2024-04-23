@@ -145,9 +145,6 @@ class data_sampler(object):
                             break
 
                 
-        # with open(self.save_data_path, "wb") as f:
-        #     pickle.dump((train_dataset, val_dataset, test_dataset), f)
-        
         return train_dataset, val_dataset, test_dataset
 
     def _read_relations(self, file):

@@ -168,20 +168,7 @@ class EmbedCollatorCustom(DataCollatorWithPadding):
             max_length=self.passage_max_len,
             return_tensors="pt",
         )
-        # pos_neg_token = self.tokenizer(
-        #     positive + negative,
-        #     padding=True,
-        #     truncation=True,
-        #     max_length=self.passage_max_len,
-        #     return_tensors="pt",
-        # )
-        # query_neg_token = self.tokenizer(
-        #     query + negative,
-        #     padding=True,
-        #     truncation=True,
-        #     max_length=self.passage_max_len,
-        #     return_tensors="pt",
-        # )
+
         return {"query": query_token, "positive": positive_token, "negative": negative_token}
 
 

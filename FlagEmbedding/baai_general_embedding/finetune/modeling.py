@@ -13,6 +13,19 @@ import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class EncoderOutput(ModelOutput):
+    q_reps: Optional[Tensor] = None
+    p_reps: Optional[Tensor] = None
+    loss: Optional[Tensor] = None
+    scores: Optional[Tensor] = None
+    
+@dataclass
+class EncoderOutputCustom(ModelOutput):
+    loss: Optional[Tensor] = None
+
+
+
 class DistilationModel(nn.Module):
     TRANSFORMER_CLS = AutoModel
 
@@ -80,6 +93,23 @@ class DistilationModel(nn.Module):
         return torch.matmul(q_reps, p_reps.transpose(-2, -1))
 
 
+
+    def compute_infonce_loss(self, q_reps, p_reps):
+        # Tính cosine similarity giữa vector query và các vectors dương
+        pos_sim = F.cosine_similarity(q_reps.unsqueeze(1), p_reps[:, 0].unsqueeze(0), dim=-1)
+        
+        # Tính cosine similarity giữa vector query và các vectors phản
+        neg_sim = F.cosine_similarity(q_reps.unsqueeze(1), p_reps[:, 1:], dim=-1)
+        
+        # Tính softmax cho các similarities
+        pos_softmax = F.softmax(pos_sim, dim=1)
+        neg_softmax = F.softmax(neg_sim, dim=1)
+        
+        # Tính loss InfoNCE
+        loss = -torch.mean(torch.log(pos_softmax) + torch.sum(torch.log(1 - neg_softmax), dim=1))
+        
+        return loss
+    
     def forward(self, query: Dict[str, Tensor] = None, passage: Dict[str, Tensor] = None, teacher_score: Tensor = None):
         q_reps = self.encode(query, self.model)
         p_reps = self.encode(passage, self.model)
@@ -105,9 +135,8 @@ class DistilationModel(nn.Module):
                 
                 target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
                 target = target * group_size
-                loss_cl = self.compute_loss(scores, target)
-
-
+                # loss_cl = self.compute_loss(scores, target)
+                loss_cl = self.compute_infonce_loss(q_reps, p_reps)
 
                 
             else:
@@ -115,7 +144,8 @@ class DistilationModel(nn.Module):
 
                 scores = scores.view(q_reps.size(0), -1)
                 target = torch.zeros(scores.size(0), device=scores.device, dtype=torch.long)
-                loss_cl = self.compute_loss(scores, target)
+                # loss_cl = self.compute_loss(scores, target)
+                loss_cl = self.compute_infonce_loss(q_reps, p_reps)
 
 
             scores_teach = self.compute_similarity(q_teach, p_teach) / self.temperature # B B*G
@@ -137,10 +167,18 @@ class DistilationModel(nn.Module):
             p_reps=p_reps,
             )
 
+
     def compute_distillation_loss(self, student_scores, teacher_scores):
-        student_scores_norm = F.normalize(student_scores, p=2, dim=-1)
-        teacher_scores_norm = F.normalize(teacher_scores, p=2, dim=-1)
-        return max(0, (1 - F.cosine_similarity(student_scores_norm, teacher_scores_norm, dim=-1).mean()))
+        student_probs = F.softmax(student_scores, dim=-1)
+        teacher_probs = F.softmax(teacher_scores, dim=-1)
+        
+        distillation_loss = F.kl_div(student_probs.log(), teacher_probs, reduction='batchmean')
+        return distillation_loss
+    
+    # def compute_distillation_loss(self, student_scores, teacher_scores):
+    #     student_scores_norm = F.normalize(student_scores, p=2, dim=-1)
+    #     teacher_scores_norm = F.normalize(teacher_scores, p=2, dim=-1)
+    #     return max(0, (1 - F.cosine_similarity(student_scores_norm, teacher_scores_norm, dim=-1).mean()))
 
 
     def compute_loss(self, scores, target):
@@ -167,19 +205,6 @@ class DistilationModel(nn.Module):
                  v in state_dict.items()})
         self.model.save_pretrained(output_dir, state_dict=state_dict)
 
-
-
-
-@dataclass
-class EncoderOutput(ModelOutput):
-    q_reps: Optional[Tensor] = None
-    p_reps: Optional[Tensor] = None
-    loss: Optional[Tensor] = None
-    scores: Optional[Tensor] = None
-    
-@dataclass
-class EncoderOutputCustom(ModelOutput):
-    loss: Optional[Tensor] = None
 
 
 class BiEncoderModel(nn.Module):
@@ -244,6 +269,23 @@ class BiEncoderModel(nn.Module):
         return torch.matmul(q_reps, p_reps.transpose(-2, -1))
 
 
+    def compute_infonce_loss(self, q_reps, p_reps):
+        # Tính cosine similarity giữa vector query và các vectors dương
+        pos_sim = F.cosine_similarity(q_reps.unsqueeze(1), p_reps[:, 0].unsqueeze(0), dim=-1)
+        
+        # Tính cosine similarity giữa vector query và các vectors phản
+        neg_sim = F.cosine_similarity(q_reps.unsqueeze(1), p_reps[:, 1:], dim=-1)
+        
+        # Tính softmax cho các similarities
+        pos_softmax = F.softmax(pos_sim, dim=1)
+        neg_softmax = F.softmax(neg_sim, dim=1)
+        
+        # Tính loss InfoNCE
+        loss = -torch.mean(torch.log(pos_softmax) + torch.sum(torch.log(1 - neg_softmax), dim=1))
+        
+        return loss
+    
+
     def forward(self, query: Dict[str, Tensor] = None, passage: Dict[str, Tensor] = None, teacher_score: Tensor = None):
         q_reps = self.encode(query)
         p_reps = self.encode(passage)
@@ -261,23 +303,16 @@ class BiEncoderModel(nn.Module):
                 
                 target = torch.arange(scores.size(0), device=scores.device, dtype=torch.long)
                 target = target * group_size
-                loss = self.compute_loss(scores, target)
+                # loss = self.compute_loss(scores, target)
+                loss = self.compute_infonce_loss(q_reps, p_reps)
 
-                
-                
             else:
                 scores = self.compute_similarity(q_reps[:, None, :,], p_reps.view(q_reps.size(0), group_size, -1)).squeeze(1) / self.temperature # B G
-
                 scores = scores.view(q_reps.size(0), -1)
                 target = torch.zeros(scores.size(0), device=scores.device, dtype=torch.long)
-                loss = self.compute_loss(scores, target)  
+                # loss = self.compute_loss(scores, target)  
+                loss = self.compute_infonce_loss(q_reps, p_reps)
 
-
-            # Compute distillation loss
-            if teacher_score is not None:
-                distillation_loss = self.compute_distillation_loss(scores, teacher_score)
-                loss += distillation_loss
-                
         else:
             scores = self.compute_similarity(q_reps, p_reps)
             loss = None
@@ -312,9 +347,4 @@ class BiEncoderModel(nn.Module):
              for k,
                  v in state_dict.items()})
         self.model.save_pretrained(output_dir, state_dict=state_dict)
-
-
-    def compute_distillation_loss(self, student_scores, teacher_scores):
-        return nn.KLDivLoss()(torch.log_softmax(student_scores, dim=-1), torch.softmax(teacher_scores, dim=-1))
-
 
