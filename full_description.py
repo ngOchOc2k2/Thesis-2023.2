@@ -13,7 +13,7 @@ from tqdm import tqdm
 import logging
 from config import Param    
 from FlagEmbedding import BGEM3FlagModel
-from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval, train_retrieval_distil, train_retrieval_custom
+from FlagEmbedding.baai_general_embedding.finetune.run import train_retrieval, train_retrieval_distil, train_retrieval_custom, train_retrieval_distil_custom
 import logging
 from collections import Counter
 import subprocess
@@ -37,11 +37,11 @@ In the sentence below, {example}. The relationship between the two entities {ent
 
 
 
-# PROMPT_TASK_TACRED = """There are four relations: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
-# The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
-# Describes the type of relationship: {relation}
-# In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
-# """
+PROMPT_TASK_TACRED = """There are four relations: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
+The goal is to classify the relationship between the entities into one of these classes based on the context provided by the sentence
+Describes the type of relationship: {relation}
+In the sentence below, {example}. The relationship between the two entities {entity1} and {entity2} is {example_relation}
+"""
 
 
 PROMPT_TASK_TACRED_NO_EXAMPLE = """There are four relations: {re1}, {re2}, {re3}, {re4}, each representing different types of relationships that can exist between the two entities. 
@@ -285,7 +285,7 @@ def remove_words_in_list(sentence, word_list):
 def get_description(config, task, example, relation_type, description, data_type, id2rel):
     if data_type == 'TACRED':
         if config.description_type == 'single':
-            return PROMPT_TASK_TACRED_NO_EXAMPLE.format_map({
+            return PROMPT_TASK_TACRED.format_map({
             're1': relation_type[0],
             're2': relation_type[1],
             're3': relation_type[2],
@@ -295,6 +295,7 @@ def get_description(config, task, example, relation_type, description, data_type
             'entity2': extract_string_between_tokens(example['text'])[1],
             'example_relation': sample['relation'],
             'example': remove_words_in_list(example['text'], REMOVE_TOKEN)
+            # 'example': example['text'],
         })
         else:
             return PROMPT_TASK_TACRED_ALL_NO_EXAMPLE.format_map({
@@ -390,7 +391,13 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
             
         # Embedding memories data
         print(f"Length passage for retrieval: {len(memories_data_text)}")
-        embedding_memories_data = bge_model.encode(memories_data_text, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+        embedding_memories_data = bge_model.encode(
+            memories_data_text, 
+            query_mode=False,
+            max_length=config.max_length_passage, 
+            return_dense=config.dense_vecs, 
+            return_colbert_vecs=config.colbert_vecs
+        )
         count_true_retrieval_total, count_total_text_data = 0, 0
         count_true_classifier_total, count_total_text_classifier = 0, 0
         
@@ -404,7 +411,7 @@ def evaluate_strict_all(config, steps, test_data_all, memories_data, list_map_re
             if config.type_similar == 'dense':
                 
                 # Embedding test data
-                embedding_test_data = bge_model.encode(test_data_text, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+                embedding_test_data = bge_model.encode(test_data_text, query_mode=False, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
                 result = embedding_test_data['dense_vecs'] @ embedding_memories_data['dense_vecs'].T
                 result = result.tolist()
                     
@@ -530,8 +537,8 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
         task_relation = [item['relation'] for item in current_data]
         
         # Embedding query and no relation data
-        embedding_query = retrieval_model.encode(query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
-        embedding_neg = retrieval_model.encode(no_relation_text, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+        embedding_query = retrieval_model.encode(query, query_mode=False, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+        embedding_neg = retrieval_model.encode(no_relation_text, query_mode=False, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
         
         if config.type_similar == 'dense':
             result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
@@ -598,8 +605,8 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                             neg_query += [get_description(config, steps, sample, memory_data[task_neg]['relations_task'], description, config.task_name, id2rel) for sample in samples]
                 
                 # Embedding query and negative
-                embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
-                embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+                embedding_query = retrieval_model.encode(current_query, query_mode=False, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+                embedding_neg = retrieval_model.encode(neg_query, query_mode=False, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
 
                 if config.type_similar == 'dense':
                     result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
@@ -653,8 +660,8 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                         neg_query += [get_description(config, steps, sample, memory_data[task_neg]['relations_task'], description, config.task_name, id2rel) for sample in samples]
             
             # Embedding query and negative
-            embedding_query = retrieval_model.encode(current_query, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
-            embedding_neg = retrieval_model.encode(neg_query, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+            embedding_query = retrieval_model.encode(current_query, query_mode=False, max_length=config.max_length_query, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
+            embedding_neg = retrieval_model.encode(neg_query, query_mode=False, max_length=config.max_length_passage, return_dense=config.dense_vecs, return_colbert_vecs=config.colbert_vecs)
 
             if config.type_similar == 'dense':
                 result = embedding_query['dense_vecs'] @ embedding_neg['dense_vecs'].T
@@ -684,7 +691,6 @@ def prepare_data_for_retrieval(config, steps, bge_m3, current_relation, descript
                                 'pos': [positive],
                                 'neg': negative,
                             })
-
                             break
 
 
@@ -873,23 +879,27 @@ if __name__ == '__main__':
 
             if config.trainable_retrieval:
                 if steps > 0:
-                    train_retrieval(
+                    train_retrieval_custom(
                         config=config, 
                         data_path=path_last, 
                         model_path='./model_teacher',
                         output_dir='./model_bge',
                     )
                     
-                    train_retrieval_distil(
+                    train_retrieval_distil_custom(
                         config=config, 
                         data_path=path_total, 
-                        model_path='./model_bge', 
+                        model_path='./model_teacher', 
                         model_teacher='./model_teacher',
                         output_dir='./model_teacher',
                         epochs=15
                     )
                 else:
-                    train_retrieval(config=config, data_path=path_total, model_path=None)
+                    train_retrieval_custom(
+                        config=config, 
+                        data_path=path_total, 
+                        model_path=None
+                    )
 
             
             
@@ -899,11 +909,9 @@ if __name__ == '__main__':
             print(f"Task {steps}: {list_map_relid2tempid}")
             
             
-
             cur_acc = max(cur_acc, evaluate_strict_model(config, encoder, classifier, test_data_task, seen_relations, map_relid2tempid)[0])
             test_cur.append(cur_acc)
             total_acc.append(cur_acc)
-
 
             torch.cuda.empty_cache()
             
@@ -924,5 +932,6 @@ if __name__ == '__main__':
             
             json.dump(list_retrieval, open(config.output_kaggle + f'./task_{steps}.json', 'w'), ensure_ascii=False)
         
-        json.dump(list_retrieval, open(f'./results/task_{steps}.json', 'w'), ensure_ascii=False)    
-        print(f"Finish result: {list_retrieval}")
+        if not os.path.exists(f'/home/thhiep/dta/19-4-CMC/Thesis-2023.2/results/task_{rou}'):
+            os.makedirs(f'/home/thhiep/dta/19-4-CMC/Thesis-2023.2/results/task_{rou}', exist_ok=True)
+        json.dump(list_retrieval, open(f'/home/thhiep/dta/19-4-CMC/Thesis-2023.2/results/task_{rou}/task_{steps}.json', 'w'), ensure_ascii=False)    

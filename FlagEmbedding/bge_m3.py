@@ -102,7 +102,9 @@ class BGEM3FlagModel:
                max_length: int = 8192,
                return_dense: bool = True,
                return_sparse: bool = False,
-               return_colbert_vecs: bool = False) -> Dict:
+               return_colbert_vecs: bool = False,
+               query_mode: bool = False,
+               ) -> Dict:
 
         if self.num_gpus > 1:
             batch_size *= self.num_gpus
@@ -145,6 +147,7 @@ class BGEM3FlagModel:
                 max_length=max_length,
             ).to(self.device)
             output = self.model(batch_data,
+                                query_mode=query_mode,
                                 return_dense=return_dense,
                                 return_sparse=return_sparse,
                                 return_colbert=return_colbert_vecs)

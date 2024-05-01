@@ -2,12 +2,12 @@ import logging
 from dataclasses import dataclass
 from typing import Dict, Optional
 import os
-
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch import nn, Tensor
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer
+from transformers import AutoModel, AutoTokenizer, AutoConfig
 from transformers.file_utils import ModelOutput
 from huggingface_hub import snapshot_download
 
@@ -67,13 +67,17 @@ class BGEM3Model(nn.Module):
             self.world_size = dist.get_world_size()
 
     def load_model(self, model_name, colbert_dim: int = -1):
-        if not os.path.exists(model_name):
-            cache_folder = os.getenv('HF_HUB_CACHE')
-            model_name = snapshot_download(repo_id=model_name,
-                                           cache_dir=cache_folder,
-                                           ignore_patterns=['flax_model.msgpack', 'rust_model.ot', 'tf_model.h5'])
-
         self.model = AutoModel.from_pretrained(model_name)
+        self.model_config = AutoConfig.from_pretrained('BAAI/bge-m3')
+        
+        
+        self.head = nn.Sequential(
+            nn.Linear(self.model_config.hidden_size * 2, self.model_config.hidden_size, bias=True),
+        )
+        if model_name != 'BAAI/bge-m3' and model_name != None:
+            self.head.load_state_dict(torch.load(os.path.join(model_name, "head.pth")))
+        
+        
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
 
         self.colbert_linear = torch.nn.Linear(in_features=self.model.config.hidden_size,
@@ -140,6 +144,7 @@ class BGEM3Model(nn.Module):
         dense_vecs, sparse_vecs, colbert_vecs = None, None, None
         last_hidden_state = self.model(**features, return_dict=True).last_hidden_state
         dense_vecs = self.dense_embedding(last_hidden_state, features['attention_mask'])
+        
         if self.unified_finetuning:
             sparse_vecs = self.sparse_embedding(last_hidden_state, features['input_ids'])
             colbert_vecs = self.colbert_embedding(last_hidden_state, features['attention_mask'])
@@ -148,6 +153,7 @@ class BGEM3Model(nn.Module):
             if self.unified_finetuning:
                 colbert_vecs = torch.nn.functional.normalize(colbert_vecs, dim=-1)
         return dense_vecs, sparse_vecs, colbert_vecs
+
 
     def encode(self, features, sub_batch_size=None):
         if features is None:
@@ -336,20 +342,39 @@ class BGEM3Model(nn.Module):
 
 
 class BGEM3ForInference(BGEM3Model):
-
     def forward(self,
                 text_input: Dict[str, Tensor] = None,
                 return_dense: bool = True,
                 return_sparse: bool = False,
                 return_colbert: bool = False,
-                return_sparse_embedding: bool = False):
+                return_sparse_embedding: bool = False,
+                query_mode: bool = False
+                ):
         assert return_dense or return_sparse or return_colbert, 'Must choose one or more from `return_colbert`, `return_sparse`, `return_dense` to set `True`!'
 
         last_hidden_state = self.model(**text_input, return_dict=True).last_hidden_state
 
         output = {}
         if return_dense:
-            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+            if query_mode == False:
+                dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+
+            elif query_mode == True:
+                tokens = text_input['input_ids'].cpu().numpy()
+                e11 = np.argwhere(tokens == 250003)[:, 0]
+                e21 = np.argwhere(tokens == 250005)[:, 0]
+
+                token_output = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+
+                dense_vecs = []
+                for e11_idx, e21_idx in zip(e11, e21):
+                    instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)
+                    dense_vecs.append(instance_output)
+                dense_vecs = torch.stack(dense_vecs)
+                # print(dense_vecs.shape)
+                dense_vecs = self.head(dense_vecs)
+                
+            # dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
             output['dense_vecs'] = dense_vecs
         if return_sparse:
             sparse_vecs = self.sparse_embedding(last_hidden_state, text_input['input_ids'],
