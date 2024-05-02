@@ -117,27 +117,28 @@ class BiEncoderModelCustom(nn.Module):
 
         elif query_mode == True:
             tokens = features['input_ids'].cpu().numpy()
-            e11 = np.argwhere(tokens == 250003)[:, 0]
-            e21 = np.argwhere(tokens == 250005)[:, 0]
+            mask_tokens = features['attention_mask']
+            
+            # Lấy chỉ mục của các token mask
+            # mask_tokens_cpu = mask_tokens.cpu()
+            mask_indices = np.argwhere(tokens == 250001)[:, 0]
 
             token_output = self.model(**features, return_dict=True)["last_hidden_state"]
-            token_output = self.sentence_embedding(token_output, features['attention_mask'])
+            token_output = self.sentence_embedding(token_output, mask_tokens)
 
             query_reps = []
-            for e11_idx, e21_idx in zip(e11, e21):
-                instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)  # Concatenate hai biểu diễn
-                query_reps.append(instance_output)
-            
-            
+            for idx in mask_indices:
+                query_reps.append(token_output[idx])
+
             query_reps = torch.stack(query_reps)
             if self.normlized:
                 query_reps = torch.nn.functional.normalize(query_reps, dim=-1)
                 
-            return self.head(query_reps.contiguous())
+            return query_reps.contiguous()
           
 
     def forward(self, query: Dict[str, Tensor] = None, passage: Dict[str, Tensor] = None, teacher_score: Tensor = None):
-        q_reps = self.encode(query, query_mode=False)
+        q_reps = self.encode(query, query_mode=True)
         p_reps = self.encode(passage)
 
         if self.training:
@@ -280,23 +281,24 @@ class DistilationModelCustom(nn.Module):
 
         elif query_mode == True:
             tokens = features['input_ids'].cpu().numpy()
-            e11 = np.argwhere(tokens == 250003)[:, 0]
-            e21 = np.argwhere(tokens == 250005)[:, 0]
+            mask_tokens = features['attention_mask']
+            
+            # Lấy chỉ mục của các token mask
+            mask_indices = np.argwhere(tokens == 250001)[:, 0]
 
-            token_output = model(**features, return_dict=True)["last_hidden_state"]
-            token_output = self.sentence_embedding(token_output, features['attention_mask'])
+            token_output = self.model(**features, return_dict=True)["last_hidden_state"]
+            token_output = self.sentence_embedding(token_output, mask_tokens)
 
             query_reps = []
-            for e11_idx, e21_idx in zip(e11, e21):
-                instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)  # Concatenate hai biểu diễn
-                query_reps.append(instance_output)
-            
-            
+            for idx in mask_indices:
+                query_reps.append(token_output[idx])
+
             query_reps = torch.stack(query_reps)
             if self.normlized:
                 query_reps = torch.nn.functional.normalize(query_reps, dim=-1)
-            return self.head(query_reps.contiguous())
-
+                
+            return query_reps.contiguous()
+          
 
     def compute_similarity(self, q_reps, p_reps):
         if len(p_reps.size()) == 2:
@@ -305,12 +307,12 @@ class DistilationModelCustom(nn.Module):
 
 
     def forward(self, query: Dict[str, Tensor] = None, passage: Dict[str, Tensor] = None, teacher_score: Tensor = None):
-        q_reps = self.encode(query, self.model, query_mode=False)
+        q_reps = self.encode(query, self.model, query_mode=True)
         p_reps = self.encode(passage, self.model)
-        q_teach = self.encode(query, self.teacher, query_mode=False)
+        q_teach = self.encode(query, self.teacher, query_mode=True)
         p_teach = self.encode(passage, self.teacher)
         loss, loss_cl, loss_kd = 0.0, 0.0, 0.0
-        llambda = 0.3
+        llambda = 0.7
 
         if self.training:
             if self.negatives_cross_device and self.use_inbatch_neg:
@@ -353,7 +355,7 @@ class DistilationModelCustom(nn.Module):
             loss=loss,
             scores=scores,
             q_reps=q_reps,
-            p_reps=combined_reps if self.training else p_reps,
+            p_reps=p_reps if self.training else p_reps,
         )
 
 

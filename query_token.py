@@ -276,7 +276,7 @@ def most_frequent_value(array):
 
 
 def remove_words_in_list(sentence, word_list):
-    prompt = """What is the relationship between the two entities {e1} with respect to {e2} in sentence: {x1}"""
+    prompt = """The relationship between two entities {e1} and {e2} is <mask> </s> {x1}"""
     return prompt.format_map({
         'e1': extract_string_between_tokens(sentence)[0],
         'e2': extract_string_between_tokens(sentence)[1],

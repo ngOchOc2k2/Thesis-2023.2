@@ -360,19 +360,31 @@ class BGEM3ForInferenceCustom(BGEM3ModelCustom):
                 dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
 
             elif query_mode == True:
-                tokens = text_input['input_ids'].cpu().numpy()
-                e11 = np.argwhere(tokens == 250003)[:, 0]
-                e21 = np.argwhere(tokens == 250005)[:, 0]
+                # tokens = text_input['input_ids'].cpu().numpy()
+                # e11 = np.argwhere(tokens == 250003)[:, 0]
+                # e21 = np.argwhere(tokens == 250005)[:, 0]
 
+                # token_output = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+
+                # dense_vecs = []
+                # for e11_idx, e21_idx in zip(e11, e21):
+                #     instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)
+                #     dense_vecs.append(instance_output)
+                # dense_vecs = torch.stack(dense_vecs)
+                # dense_vecs = self.head(dense_vecs)
+
+
+                tokens = text_input['input_ids'].cpu().numpy()
+                mask_indices = np.argwhere(tokens == 250001)[:, 0]
                 token_output = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
 
                 dense_vecs = []
-                for e11_idx, e21_idx in zip(e11, e21):
-                    instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)
-                    dense_vecs.append(instance_output)
+                for idx in mask_indices:
+                    dense_vecs.append(token_output[idx])
+
                 dense_vecs = torch.stack(dense_vecs)
-                dense_vecs = self.head(dense_vecs)
-                
+
+          
             # dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
             output['dense_vecs'] = dense_vecs
         if return_sparse:
