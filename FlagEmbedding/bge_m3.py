@@ -8,6 +8,7 @@ from transformers import PreTrainedTokenizerFast, BatchEncoding, DataCollatorWit
 from torch.utils.data import DataLoader
 from functools import partial
 from FlagEmbedding.BGE_M3 import BGEM3ForInference
+from FlagEmbedding.BGE_M3 import BGEM3ForInferenceCustom
 
 
 def _transform_func(examples: Dict[str, List],
@@ -280,7 +281,5 @@ class BGEM3FlagModel:
             return {k: v[0] for k, v in all_scores.items()}
         return all_scores
 
-
-
-    # def to(self, device):
-    #     self.model.to(device)
+    def to(self, device):
+        self.model.to(device)

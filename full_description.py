@@ -275,11 +275,17 @@ def most_frequent_value(array):
 
 
 def remove_words_in_list(sentence, word_list):
-    sentence = re.sub(r'[^\w\s]', '', sentence)
-    words = sentence.split()
-    processed_words = [word for word in words if word not in word_list]
-    processed_sentence = ' '.join(processed_words)
-    return processed_sentence
+    prompt = """What is the relationship between the two entities {e1} with respect to {e2} in sentence: {x1}"""
+    return prompt.format_map({
+        'e1': extract_string_between_tokens(sentence)[0],
+        'e2': extract_string_between_tokens(sentence)[1],
+        'x1': sentence
+    })
+    # sentence = re.sub(r'[^\w\s]', '', sentence)
+    # words = sentence.split()
+    # processed_words = [word for word in words if word not in word_list]
+    # processed_sentence = ' '.join(processed_words)
+    # return processed_sentence
 
 
 def get_description(config, task, example, relation_type, description, data_type, id2rel):
@@ -879,14 +885,14 @@ if __name__ == '__main__':
 
             if config.trainable_retrieval:
                 if steps > 0:
-                    train_retrieval_custom(
+                    train_retrieval(
                         config=config, 
                         data_path=path_last, 
                         model_path='./model_teacher',
                         output_dir='./model_bge',
                     )
                     
-                    train_retrieval_distil_custom(
+                    train_retrieval_distil(
                         config=config, 
                         data_path=path_total, 
                         model_path='./model_teacher', 
@@ -895,7 +901,7 @@ if __name__ == '__main__':
                         epochs=15
                     )
                 else:
-                    train_retrieval_custom(
+                    train_retrieval(
                         config=config, 
                         data_path=path_total, 
                         model_path=None

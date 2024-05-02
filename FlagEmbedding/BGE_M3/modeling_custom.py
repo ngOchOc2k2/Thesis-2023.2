@@ -22,7 +22,7 @@ class EncoderOutput(ModelOutput):
     scores: Optional[Tensor] = None
 
 
-class BGEM3Model(nn.Module):
+class BGEM3ModelCustom(nn.Module):
 
     def __init__(self,
                  model_name: str = None,
@@ -68,14 +68,14 @@ class BGEM3Model(nn.Module):
 
     def load_model(self, model_name, colbert_dim: int = -1):
         self.model = AutoModel.from_pretrained(model_name)
-        # self.model_config = AutoConfig.from_pretrained('BAAI/bge-m3')
+        self.model_config = AutoConfig.from_pretrained('BAAI/bge-m3')
         
         
-        # self.head = nn.Sequential(
-        #     nn.Linear(self.model_config.hidden_size * 2, self.model_config.hidden_size, bias=True),
-        # )
-        # if model_name != 'BAAI/bge-m3' and model_name != None:
-        #     self.head.load_state_dict(torch.load(os.path.join(model_name, "head.pth")))
+        self.head = nn.Sequential(
+            nn.Linear(self.model_config.hidden_size * 2, self.model_config.hidden_size, bias=True),
+        )
+        if model_name != 'BAAI/bge-m3' and model_name != None:
+            self.head.load_state_dict(torch.load(os.path.join(model_name, "head.pth")))
         
         
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -341,7 +341,7 @@ class BGEM3Model(nn.Module):
         self.sparse_linear.load_state_dict(sparse_state_dict)
 
 
-class BGEM3ForInference(BGEM3Model):
+class BGEM3ForInferenceCustom(BGEM3ModelCustom):
     def forward(self,
                 text_input: Dict[str, Tensor] = None,
                 return_dense: bool = True,
@@ -356,25 +356,24 @@ class BGEM3ForInference(BGEM3Model):
 
         output = {}
         if return_dense:
-            # if query_mode == False:
-            #     dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+            if query_mode == False:
+                dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
 
-            # elif query_mode == True:
-            #     tokens = text_input['input_ids'].cpu().numpy()
-            #     e11 = np.argwhere(tokens == 250003)[:, 0]
-            #     e21 = np.argwhere(tokens == 250005)[:, 0]
+            elif query_mode == True:
+                tokens = text_input['input_ids'].cpu().numpy()
+                e11 = np.argwhere(tokens == 250003)[:, 0]
+                e21 = np.argwhere(tokens == 250005)[:, 0]
 
-            #     token_output = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+                token_output = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
 
-            #     dense_vecs = []
-            #     for e11_idx, e21_idx in zip(e11, e21):
-            #         instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)
-            #         dense_vecs.append(instance_output)
-            #     dense_vecs = torch.stack(dense_vecs)
-            #     # print(dense_vecs.shape)
-            #     dense_vecs = self.head(dense_vecs)
+                dense_vecs = []
+                for e11_idx, e21_idx in zip(e11, e21):
+                    instance_output = torch.cat((token_output[e11_idx], token_output[e21_idx]), dim=0)
+                    dense_vecs.append(instance_output)
+                dense_vecs = torch.stack(dense_vecs)
+                dense_vecs = self.head(dense_vecs)
                 
-            dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
+            # dense_vecs = self.dense_embedding(last_hidden_state, text_input['attention_mask'])
             output['dense_vecs'] = dense_vecs
         if return_sparse:
             sparse_vecs = self.sparse_embedding(last_hidden_state, text_input['input_ids'],
